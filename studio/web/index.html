@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentCraft Studio</title>
+<link rel="icon" href="assets/icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="top">
+  <div class="brand"><img src="assets/icon.png" alt=""><span>AgentCraft</span></div>
+  <div id="repo" class="chip" title="Project"></div>
+  <div id="goal">
+    <div id="goal-text">No goal yet. Type one below.</div>
+    <div class="bar"><div id="goal-fill"></div></div>
+  </div>
+  <div id="backend" class="chip"></div>
+  <button id="btn-view" class="ghost" title="Switch between the 3D studio and the flat floor plan">2D view</button>
+  <button id="btn-library" class="ghost" title="Shared memory: the plan, decisions and conventions">Library</button>
+</header>
+
+<div id="banner" hidden></div>
+
+<main>
+  <section id="floor">
+    <canvas id="room" width="512" height="320"></canvas>
+    <div id="overlay"></div>
+  </section>
+
+  <aside id="side">
+    <section class="panel" id="p-decisions">
+      <h2>Needs you <span id="dec-count" class="count">0</span></h2>
+      <div id="decisions" class="list"></div>
+    </section>
+    <section class="panel" id="p-tasks">
+      <h2>Task wall</h2>
+      <div id="tasks" class="kanban"></div>
+    </section>
+    <section class="panel grow" id="p-feed">
+      <h2>Activity</h2>
+      <div id="feed" class="list"></div>
+    </section>
+  </aside>
+</main>
+
+<footer id="console">
+  <span class="prompt">&gt;</span>
+  <input id="cmd" autocomplete="off" spellcheck="false"
+         placeholder="Type a goal for the team, @kit to message an agent, or /help">
+  <div id="suggest" hidden></div>
+</footer>
+
+<div id="modal" hidden><div id="modal-box" role="dialog" aria-modal="true"></div></div>
+<div id="toasts"></div>
+
+<script src="app.js"></script>
+<script type="module" src="view3d.js"></script>
+</body>
+</html>

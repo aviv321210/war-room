@@ -1,0 +1,7 @@
+# big binaries: re-download / rebuild (see HANDOFF.md)
+downloads/
+out/
+stage/
+# scratch output
+*.log
+shot*.png
