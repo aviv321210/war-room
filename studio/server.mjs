@@ -1,4 +1,4 @@
-// AgentCraft Studio server: serves the 2D studio app and bridges it to the Foreman.
+// War Room server: serves the 2D studio app and bridges it to the Foreman.
 //
 // The Foreman refuses browser connections (any Origin header), so a web page can never drive
 // the agents. This server keeps that guarantee: it listens on 127.0.0.1 only, the app page and
@@ -55,7 +55,7 @@ const server = http.createServer((req, res) => {
   // the launcher opens /?t=<token>: trade it for a cookie and drop it from the address bar
   const t = url.searchParams.get('t');
   if (t) {
-    if (!same(t, TOKEN)) { res.writeHead(403).end('AgentCraft Studio: start it from the AgentCraft shortcut.'); return; }
+    if (!same(t, TOKEN)) { res.writeHead(403).end('War Room: start it from the War Room shortcut.'); return; }
     res.writeHead(302, {
       'Set-Cookie': `ac_token=${TOKEN}; HttpOnly; SameSite=Strict; Path=/`,
       Location: '/',
@@ -64,7 +64,7 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (!same(cookieToken(req), TOKEN)) {
-    res.writeHead(403, { 'Content-Type': 'text/plain' }).end('AgentCraft Studio: start it from the AgentCraft shortcut.');
+    res.writeHead(403, { 'Content-Type': 'text/plain' }).end('War Room: start it from the War Room shortcut.');
     return;
   }
   let rel = decodeURIComponent(url.pathname);
@@ -227,8 +227,8 @@ const dialing = new Set();      // host:port being connected to
 const seen = new Map();         // id -> { addr, port, name, first }
 function sendTo(ws, m) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m)); }
 function toPeers(m) { for (const p of peers.values()) sendTo(p.ws, m); }
-function proof() { return self.code ? crypto.createHash('sha256').update('agentcraft-team:' + self.code).digest('hex').slice(0, 32) : ''; }
-function hello() { return { t: 'hello', app: 'agentcraft-peer', v: 1, id: self.id, name: self.name, proof: proof() }; }
+function proof() { return self.code ? crypto.createHash('sha256').update('warroom-team:' + self.code).digest('hex').slice(0, 32) : ''; }
+function hello() { return { t: 'hello', app: 'warroom-peer', v: 1, id: self.id, name: self.name, proof: proof() }; }
 function peerView(p) { return { id: p.id, name: p.name, look: p.look, office: p.office, pos: p.pos, addr: p.addr }; }
 
 function attachPeer(ws, addr, outbound) {
@@ -242,7 +242,7 @@ function attachPeer(ws, addr, outbound) {
     let m; try { m = JSON.parse(data.toString()); } catch { return; }
     if (!peer) {
       if (m.t === 'denied') { log(`peer ${addr} refused us: ${str(m.why, 60)}`); ws.close(); return; }
-      if (m.t !== 'hello' || m.app !== 'agentcraft-peer' || typeof m.id !== 'string' || !/^[a-f0-9]{16}$/.test(m.id) || m.id === self.id) { ws.close(); return; }
+      if (m.t !== 'hello' || m.app !== 'warroom-peer' || typeof m.id !== 'string' || !/^[a-f0-9]{16}$/.test(m.id) || m.id === self.id) { ws.close(); return; }
       if (str(m.proof, 64) !== proof()) { sendTo(ws, { t: 'denied', why: 'different team code' }); ws.close(); return; }
       const old = peers.get(m.id);
       if (old && old.ws.readyState === WebSocket.OPEN) { ws.close(); return; }   // already connected the other way
@@ -297,7 +297,7 @@ if (!NO_LAN) {
   disco.on('error', (e) => log(`LAN discovery off (${e.code})`));
   disco.on('message', (buf, rinfo) => {
     let m; try { m = JSON.parse(buf.toString()); } catch { return; }
-    if (m.app !== 'agentcraft' || typeof m.id !== 'string' || !/^[a-f0-9]{16}$/.test(m.id) || m.id === self.id) return;
+    if (m.app !== 'warroom' || typeof m.id !== 'string' || !/^[a-f0-9]{16}$/.test(m.id) || m.id === self.id) return;
     const port = Math.round(num(m.port, 1, 65535));
     if (!seen.has(m.id)) seen.set(m.id, { first: Date.now() });
     Object.assign(seen.get(m.id), { addr: rinfo.address, port, name: str(m.name, 24), at: Date.now() });
@@ -307,7 +307,7 @@ if (!NO_LAN) {
   });
   disco.bind(DISCO_PORT, () => { try { disco.setBroadcast(true); } catch { /* ignore */ } });
   const announce = () => {
-    const b = Buffer.from(JSON.stringify({ app: 'agentcraft', v: 1, id: self.id, name: self.name, port: PEER_PORT }));
+    const b = Buffer.from(JSON.stringify({ app: 'warroom', v: 1, id: self.id, name: self.name, port: PEER_PORT }));
     for (const a of broadcastAddrs()) disco.send(b, DISCO_PORT, a, () => {});
   };
   setInterval(announce, 3000);

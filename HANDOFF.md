@@ -1,4 +1,4 @@
-# AgentCraft — session handoff
+# War Room (formerly AgentCraft) — session handoff
 
 _For the next Claude Code session. Read this first. Everything lives on `C:\dev\agentcraft-dist` (the custom app) and `C:\dev\agentcraft` (the upstream repo clone)._
 
@@ -12,6 +12,15 @@ driven by the real Foreman) so there is nothing to buy and nothing to install bu
 
 **End goal:** one installer/`.exe` the user can share by link. Coworkers run it, each with their own
 Anthropic API key, their own repos, their own spend.
+
+## Name: War Room (decided 2026-11-16)
+
+The app is now called **War Room** (user's choice). Done: window title, header, office sign, server messages,
+Coworkers panel text, and the LAN protocol ids (`warroom` discovery, `warroom-peer` hello, `warroom-team:` code hash;
+old AgentCraft builds will not see new ones, which is fine pre-release). **Still named AgentCraft, rename with the
+installer rewrite:** the `~/.agentcraft` data folder (server.mjs `STATE`, foreman `--home`), `%LOCALAPPDATA%AgentCraft`,
+`src/Launcher.cs`, `src/AgentCraft.iss`, `build.ps1`, this repo folder. Keep upstream credit + license
+(the Foreman is blendi-remade/agentcraft). Check the name is not taken by other software before shipping.
 
 ## Architecture
 

@@ -1,4 +1,4 @@
-// AgentCraft Studio: the 3D view. Same room plan and agents as the 2D view (tile units -> metres:
+// War Room: the 3D view. Same room plan and agents as the 2D view (tile units -> metres:
 // tile (x, y) = world (x, 0, y)), drawn with three.js from AgentCraft's own textures and skins.
 import * as THREE from './vendor/three.module.min.js';
 
@@ -561,7 +561,7 @@ if (location.hash.startsWith('#walk')) {   // screenshots: a look without saving
 }
 function buildAvatar() {
   if (me.fig) scene.remove(me.fig.root);
-  if (!me.look) { me.fig = null; paintSign('AgentCraft office'); return; }
+  if (!me.look) { me.fig = null; paintSign('War Room'); return; }
   const t = new THREE.CanvasTexture(paintSkin(me.look));
   t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter; t.colorSpace = THREE.SRGBColorSpace;
   me.fig = buildFigure({}, { base: mat({ map: t, alphaTest: 0.5 }), over: mat({ map: t, alphaTest: 0.5 }) });
@@ -1115,7 +1115,7 @@ function renderPeersPanel() {
   AC.modal('peers', '', `
     <div class="m-head"><h1>Coworkers <span class="sub">your campus on the local network</span></h1><button class="x" data-close aria-label="Close">&times;</button></div>
     <div class="m-body">
-      <p>${list.length ? `On the campus now:` : 'Nobody else yet. Coworkers running AgentCraft on the same network appear by themselves; if they do not, add them by PC name or address.'}</p>
+      <p>${list.length ? `On the campus now:` : 'Nobody else yet. Coworkers running War Room on the same network appear by themselves; if they do not, add them by PC name or address.'}</p>
       ${list.length ? `<ul class="peers">${list.map((p) => `<li><b>${AC.esc(p.name)}</b> <span class="muted">${AC.esc(p.addr ?? '')} &middot; ${AC.esc(p.office?.backend === 'sim' ? 'demo team' : p.office?.backend ?? '')}</span></li>`).join('')}</ul>` : ''}
       <h3>Add a coworker</h3>
       <div class="row"><input type="text" id="pp-host" placeholder="PC name or IP address, e.g. DANA-LAPTOP or 10.0.4.17"><button id="pp-add">Connect</button></div>
@@ -1123,7 +1123,7 @@ function renderPeersPanel() {
       <h3>Your address</h3>
       <p>Others can add you as <b>${AC.esc(s?.host ?? '?')}</b>${s?.addrs?.length ? ` or <b>${s.addrs.map(AC.esc).join('</b>, <b>')}</b>` : ''} <span class="muted">(port ${s?.port ?? 7891})</span></p>
       <h3>Team code</h3>
-      <p class="muted">Optional. With a code, only coworkers who type the same code can join your campus. Empty = anyone running AgentCraft on this network.</p>
+      <p class="muted">Optional. With a code, only coworkers who type the same code can join your campus. Empty = anyone running War Room on this network.</p>
       <div class="row"><input type="password" id="pp-code" value="${AC.esc(s?.code ?? '')}" placeholder="no code"><button class="quiet" id="pp-save">Save code</button></div>
       <p class="muted">Shared with coworkers: your name and avatar, where you walk, chat, and your team's activity (agents' status lines, task titles, progress). Never logs, diffs or code, and nobody else can answer your agents.</p>
     </div>`);

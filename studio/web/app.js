@@ -1,4 +1,4 @@
-// AgentCraft Studio: a 2D view of the AgentCraft Foreman (protocol v1, docs/protocol.md).
+// War Room: a 2D view of the Foreman (from upstream AgentCraft) (protocol v1, docs/protocol.md).
 'use strict';
 
 // ---------------------------------------------------------------------------------------------
@@ -480,10 +480,10 @@ function renderHeader() {
     const auth = f.auth === 'ok' ? '' : f.auth === 'failed' ? ' <span class="warn">&middot; sign-in failed</span>' : ` &middot; ${esc(f.auth)}`;
     $('#backend').innerHTML = `<b>${who}</b>${cost}${auth}`;
     $('#backend').title = f.message ?? '';
-    if (f.auth === 'failed') banner(f.message || 'The agents cannot run: check the API key in AgentCraft settings.');
+    if (f.auth === 'failed') banner(f.message || 'The agents cannot run: check the API key in War Room settings.');
     else if (S.connected) banner(null);
   }
-  document.title = `${openDecisions().length ? `(${openDecisions().length}) ` : ''}AgentCraft Studio`;
+  document.title = `${openDecisions().length ? `(${openDecisions().length}) ` : ''}War Room`;
 }
 
 const openDecisions = () => [...S.decisions.values()].filter((d) => d.status === 'open').sort((a, b) => a.createdAt - b.createdAt);
