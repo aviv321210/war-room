@@ -364,7 +364,7 @@ function attachPeer(ws, addr, outbound, port = 0) {
           const g = m.go, h = str(g?.host, 80);
           if (session.mode === 'mesh' && /^[\w.\-:]+$/.test(h)) dial(h, Math.round(num(g.port, 1, 65535)) || PEER_PORT);
         } else {
-          log(`peer ${addr} refused us: ${why}`);
+          if (!refusedSeen.has(addr)) log(`peer ${addr} refused us: ${why}`);      // it is retried every few seconds: say it once
           codeNotice(addr, why === 'version' ? `${addr} runs a different War Room version than yours (${APP_VERSION}). ${OTHER_VERSION}`
             : why === 'two hosts' ? `${addr} is hosting a session too. Only one studio on the network should host.`
             : why === 'full' ? `${addr} has no room for more people.`
