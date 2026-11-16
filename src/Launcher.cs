@@ -1,8 +1,9 @@
-// AgentCraft launcher: one click starts the Foreman (the agents) in the background and opens
-// Minecraft through the bundled Prism Launcher instance.
-//   AgentCraft.exe              start (first run, or Shift held: settings first)
-//   AgentCraft.exe --settings   change mode / API key / project folder
-//   AgentCraft.exe --stop       stop the Foreman
+// War Room launcher: one click starts the Foreman (the agents) and the studio server in the
+// background, then opens the War Room window (Microsoft Edge in app mode, its own profile).
+//   WarRoom.exe              start (first run, or Shift held: settings first)
+//   WarRoom.exe --settings   change mode / API key / project folder
+//   WarRoom.exe --stop       stop the agents and the studio server
+// The agents keep working when the window is closed; "Stop War Room" (Start menu) ends them.
 // Written for the .NET Framework 4 compiler (C# 5): no string interpolation or newer syntax.
 using System;
 using System.Diagnostics;
@@ -14,18 +15,24 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
-[assembly: System.Reflection.AssemblyTitle("AgentCraft")]
-[assembly: System.Reflection.AssemblyProduct("AgentCraft")]
-[assembly: System.Reflection.AssemblyVersion("0.1.0.0")]
+[assembly: System.Reflection.AssemblyTitle("War Room")]
+[assembly: System.Reflection.AssemblyProduct("War Room")]
+[assembly: System.Reflection.AssemblyVersion("0.2.0.0")]
 
 static class Launcher
 {
-    const int Port = 7878;
+    const string Title = "War Room";
+    const int ForemanPort = 7878;
+    const int StudioPort = 7880;
     static string App = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
-    static string Home = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agentcraft");
+    static string UserDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+    static string Home = Path.Combine(UserDir, ".warroom");
     static string SettingsFile = Path.Combine(Home, "launcher.cfg");
+    static string StudioState = Path.Combine(Home, "studio.json");
     static string LogDir = Path.Combine(App, "logs");
+    static string WindowProfile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"WarRoom\window");
 
     [STAThread]
     static int Main(string[] args)
@@ -34,7 +41,8 @@ static class Launcher
         string a = args.Length > 0 ? args[0].ToLowerInvariant() : "";
         try
         {
-            if (a == "--stop") { StopForeman(null); return 0; }
+            if (a == "--stop") { StopStudio(); StopForeman(null); return 0; }
+            MigrateOldSettings();
             Settings s = Settings.Load();
             bool shift = (Control.ModifierKeys & Keys.Shift) == Keys.Shift;
             if (s == null || a == "--settings" || shift)
@@ -42,15 +50,23 @@ static class Launcher
                 s = SettingsForm.Ask(s ?? new Settings());
                 if (s == null) return 1;
                 s.Save();
-                if (a == "--settings") StopForeman(null);   // next start uses the new settings
+                if (a == "--settings" || shift) StopForeman(null);   // the next start uses the new settings
             }
             return Start(s);
         }
         catch (Exception e)
         {
-            MessageBox.Show(e.Message, "AgentCraft", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(e.Message, Title, MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }
+    }
+
+    // the earlier AgentCraft build kept its settings in ~/.agentcraft: carry the choices over once
+    static void MigrateOldSettings()
+    {
+        string old = Path.Combine(Path.Combine(UserDir, ".agentcraft"), "launcher.cfg");
+        if (File.Exists(SettingsFile) || !File.Exists(old)) return;
+        try { Directory.CreateDirectory(Home); File.Copy(old, SettingsFile); } catch { /* start with the setup dialog */ }
     }
 
     static int Start(Settings s)
@@ -60,125 +76,206 @@ static class Launcher
         string other = backend == "sim" ? "claude" : "sim";
         if (ForemanPid(other) > 0) StopForeman(other);
 
-        if (!PortOpen())
+        string token = StudioToken();
+        if (!PortOpen(ForemanPort) || token == null)
         {
-            using (Splash splash = new Splash("Starting the AgentCraft team..."))
+            using (Splash splash = new Splash("Starting the War Room..."))
             {
                 splash.Show();
                 Application.DoEvents();
-                string log = StartForeman(s, backend);
-                DateTime deadline = DateTime.Now.AddSeconds(120);
-                while (!PortOpen())
+                if (!PortOpen(ForemanPort))
                 {
-                    if (DateTime.Now > deadline || !ForemanStillStarting(backend, log))
-                    {
-                        splash.Close();
-                        MessageBox.Show("The AgentCraft Foreman did not start.\n\nLast lines of " + log + ":\n\n" + Tail(log, 12),
-                            "AgentCraft", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        return 1;
-                    }
-                    Application.DoEvents();
-                    Thread.Sleep(300);
+                    string log = StartForeman(s, backend);
+                    if (!WaitFor(delegate { return PortOpen(ForemanPort); }, 120, delegate { return ForemanStillStarting(backend, log); }))
+                        return Fail(splash, "The agents (the Foreman) did not start.", log);
+                }
+                if (token == null)
+                {
+                    string log = StartStudio();
+                    if (!WaitFor(delegate { return (token = StudioToken()) != null; }, 30, delegate { return !LogSays(log, @"(Error|in use|Cannot find)"); }))
+                        return Fail(splash, "The War Room server did not start.", log);
                 }
             }
         }
-        StartGame();
+        OpenWindow("http://127.0.0.1:" + StudioPort + "/?t=" + token);
         return 0;
     }
+
+    delegate bool Check();
+    static bool WaitFor(Check done, int seconds, Check stillTrying)
+    {
+        DateTime deadline = DateTime.Now.AddSeconds(seconds);
+        while (!done())
+        {
+            if (DateTime.Now > deadline || !stillTrying()) return false;
+            Application.DoEvents();
+            Thread.Sleep(300);
+        }
+        return true;
+    }
+
+    static int Fail(Form splash, string what, string log)
+    {
+        splash.Close();
+        MessageBox.Show(what + "\n\nLast lines of " + log + ":\n\n" + Tail(log, 12), Title, MessageBoxButtons.OK, MessageBoxIcon.Error);
+        return 1;
+    }
+
+    // --- processes -----------------------------------------------------------------------------
+
+    static ProcessStartInfo Hidden(string node, string args, string workDir, string log)
+    {
+        ProcessStartInfo psi = new ProcessStartInfo(Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
+            "/d /s /c \"" + Q(node) + " " + args + " >> " + Q(log) + " 2>&1\"");
+        psi.WorkingDirectory = workDir;
+        psi.UseShellExecute = false;
+        psi.CreateNoWindow = true;
+        psi.EnvironmentVariables["PATH"] = Path.Combine(App, @"runtime\git\cmd") + ";" + Path.Combine(App, @"runtime\node") + ";" +
+                                           Environment.GetEnvironmentVariable("PATH");
+        psi.EnvironmentVariables.Remove("NODE_OPTIONS");
+        return psi;
+    }
+
+    static string NodeExe { get { return Path.Combine(App, @"runtime\node\node.exe"); } }
 
     static string StartForeman(Settings s, string backend)
     {
         Directory.CreateDirectory(LogDir);
         Directory.CreateDirectory(Home);
         string log = Path.Combine(LogDir, "foreman-" + backend + ".log");
-        string node = Path.Combine(App, @"runtime\node\node.exe");
         string args = "--import tsx src/main.ts --backend " + backend + " --profile " + backend +
-                      " --home " + Q(Home) + " --port " + Port;
+                      " --home " + Q(Home) + " --port " + ForemanPort;
         if (backend == "claude" && !string.IsNullOrEmpty(s.Repo)) args += " --repo " + Q(s.Repo);
         if (s.Budget > 0) args += " --max-budget " + s.Budget.ToString(System.Globalization.CultureInfo.InvariantCulture);
-
-        ProcessStartInfo psi = new ProcessStartInfo(Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
-            "/d /s /c \"" + Q(node) + " " + args + " >> " + Q(log) + " 2>&1\"");
-        psi.WorkingDirectory = Path.Combine(App, "foreman");
-        psi.UseShellExecute = false;
-        psi.CreateNoWindow = true;
-        string path = Path.Combine(App, @"runtime\git\cmd") + ";" + Path.Combine(App, @"runtime\node") + ";" +
-                      Environment.GetEnvironmentVariable("PATH");
-        psi.EnvironmentVariables["PATH"] = path;
+        ProcessStartInfo psi = Hidden(NodeExe, args, Path.Combine(App, "foreman"), log);
         psi.EnvironmentVariables["AGENTCRAFT_HOME"] = Home;
-        psi.EnvironmentVariables.Remove("NODE_OPTIONS");
-        if (backend == "claude")
-        {
-            psi.EnvironmentVariables["ANTHROPIC_API_KEY"] = s.ApiKey ?? "";
-        }
-        File.AppendAllText(log, "\r\n===== " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " AgentCraft launcher: starting the Foreman (" + backend + ")\r\n");
+        if (backend == "claude") psi.EnvironmentVariables["ANTHROPIC_API_KEY"] = s.ApiKey ?? "";
+        File.AppendAllText(log, "\r\n===== " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " War Room launcher: starting the Foreman (" + backend + ")\r\n");
         Process.Start(psi);
         return log;
+    }
+
+    static string StartStudio()
+    {
+        Directory.CreateDirectory(LogDir);
+        Directory.CreateDirectory(Home);
+        string log = Path.Combine(LogDir, "studio.log");
+        string args = Q(Path.Combine(App, @"studio\server.mjs")) + " --port " + StudioPort + " --foreman " + ForemanPort +
+                      " --foreman-dir " + Q(Path.Combine(App, "foreman")) + " --state " + Q(StudioState);
+        File.AppendAllText(log, "\r\n===== " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " War Room launcher: starting the studio server\r\n");
+        Process.Start(Hidden(NodeExe, args, Path.Combine(App, "studio"), log));
+        return log;
+    }
+
+    // the studio server writes {pid, port, token} once it listens; null unless it is alive and answering
+    static string StudioToken()
+    {
+        if (!File.Exists(StudioState)) return null;
+        try
+        {
+            string j = File.ReadAllText(StudioState);
+            Match t = Regex.Match(j, "\"token\"\\s*:\\s*\"([a-f0-9]+)\"");
+            if (!t.Success || NodePid(j) == 0 || !PortOpen(StudioPort)) return null;
+            return t.Groups[1].Value;
+        }
+        catch { return null; }
+    }
+
+    static void OpenWindow(string url)
+    {
+        string edge = FindEdge();
+        if (edge == null)
+        {
+            Process.Start(url);   // no Edge: the default browser still works (the token is single-use per run)
+            return;
+        }
+        Directory.CreateDirectory(WindowProfile);
+        ProcessStartInfo psi = new ProcessStartInfo(edge,
+            "--app=" + Q(url) + " --user-data-dir=" + Q(WindowProfile) + " --window-size=1440,900 --no-first-run --no-default-browser-check");
+        psi.UseShellExecute = false;
+        Process.Start(psi);
+    }
+
+    static string FindEdge()
+    {
+        foreach (RegistryKey root in new[] { Registry.CurrentUser, Registry.LocalMachine })
+        {
+            try
+            {
+                using (RegistryKey k = root.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe"))
+                {
+                    string p = k == null ? null : k.GetValue("") as string;
+                    if (!string.IsNullOrEmpty(p) && File.Exists(p)) return p;
+                }
+            }
+            catch { /* try the next place */ }
+        }
+        foreach (string pf in new[] { Environment.GetEnvironmentVariable("ProgramFiles(x86)"), Environment.GetEnvironmentVariable("ProgramFiles") })
+        {
+            if (string.IsNullOrEmpty(pf)) continue;
+            string p = Path.Combine(pf, @"Microsoft\Edge\Application\msedge.exe");
+            if (File.Exists(p)) return p;
+        }
+        return null;
     }
 
     static bool ForemanStillStarting(string backend, string log)
     {
         // the Foreman exits early on a fatal start error; the log then ends with it
-        string t = Tail(log, 3);
-        return !Regex.IsMatch(t, @"(Error|error:|EADDRINUSE|Cannot find)", RegexOptions.None) || ForemanPid(backend) > 0;
+        return !LogSays(log, @"(Error|error:|EADDRINUSE|Cannot find)") || ForemanPid(backend) > 0;
     }
 
-    static void StartGame()
+    static bool LogSays(string log, string pattern) { return Regex.IsMatch(Tail(log, 3), pattern); }
+
+    static int NodePid(string json)
     {
-        string prism = Path.Combine(App, @"prism\prismlauncher.exe");
-        ProcessStartInfo psi = new ProcessStartInfo(prism, "--launch AgentCraft");
-        psi.WorkingDirectory = Path.Combine(App, "prism");
-        psi.UseShellExecute = false;
-        // the game inherits Prism's environment
-        psi.EnvironmentVariables["AGENTCRAFT_PORT"] = Port.ToString();
-        psi.EnvironmentVariables["AGENTCRAFT_MUTE"] = "0";
-        psi.EnvironmentVariables["AGENTCRAFT_FOCUS"] = "1";
-        psi.EnvironmentVariables["AGENTCRAFT_AUTOWORLD"] = "1";
-        Process.Start(psi);
+        Match m = Regex.Match(json, "\"pid\"\\s*:\\s*(\\d+)");
+        if (!m.Success) return 0;
+        try
+        {
+            int pid = int.Parse(m.Groups[1].Value);
+            return Process.GetProcessById(pid).ProcessName.ToLowerInvariant().StartsWith("node") ? pid : 0;
+        }
+        catch { return 0; }
     }
-
-    // --- Foreman process ---------------------------------------------------------------------
 
     static int ForemanPid(string profile)
     {
         string f = Path.Combine(Path.Combine(Home, profile), "foreman.json");
-        if (!File.Exists(f)) return 0;
-        try
-        {
-            Match m = Regex.Match(File.ReadAllText(f), "\"pid\"\\s*:\\s*(\\d+)");
-            if (!m.Success) return 0;
-            int pid = int.Parse(m.Groups[1].Value);
-            Process p = Process.GetProcessById(pid);
-            return p.ProcessName.ToLowerInvariant().StartsWith("node") ? pid : 0;
-        }
+        try { return File.Exists(f) ? NodePid(File.ReadAllText(f)) : 0; }
         catch { return 0; }
+    }
+
+    static void Kill(int pid)
+    {
+        if (pid <= 0) return;
+        ProcessStartInfo psi = new ProcessStartInfo("taskkill.exe", "/T /F /PID " + pid);
+        psi.UseShellExecute = false;
+        psi.CreateNoWindow = true;
+        Process.Start(psi).WaitForExit(15000);
     }
 
     static void StopForeman(string onlyProfile)
     {
         foreach (string profile in new[] { "sim", "claude" })
-        {
-            if (onlyProfile != null && profile != onlyProfile) continue;
-            int pid = ForemanPid(profile);
-            if (pid <= 0) continue;
-            ProcessStartInfo psi = new ProcessStartInfo("taskkill.exe", "/T /F /PID " + pid);
-            psi.UseShellExecute = false;
-            psi.CreateNoWindow = true;
-            Process k = Process.Start(psi);
-            k.WaitForExit(15000);
-        }
-        for (int i = 0; i < 30 && PortOpen(); i++) Thread.Sleep(200);
+            if (onlyProfile == null || profile == onlyProfile) Kill(ForemanPid(profile));
+        for (int i = 0; i < 30 && PortOpen(ForemanPort); i++) Thread.Sleep(200);
     }
 
-    static bool PortOpen()
+    static void StopStudio()
+    {
+        try { if (File.Exists(StudioState)) Kill(NodePid(File.ReadAllText(StudioState))); } catch { /* already gone */ }
+        try { File.Delete(StudioState); } catch { /* not there */ }
+    }
+
+    static bool PortOpen(int port)
     {
         try
         {
             using (TcpClient c = new TcpClient())
             {
-                IAsyncResult r = c.BeginConnect("127.0.0.1", Port, null, null);
-                bool ok = r.AsyncWaitHandle.WaitOne(300) && c.Connected;
-                return ok;
+                IAsyncResult r = c.BeginConnect("127.0.0.1", port, null, null);
+                return r.AsyncWaitHandle.WaitOne(300) && c.Connected;
             }
         }
         catch { return false; }
@@ -252,7 +349,7 @@ static class Launcher
             Size = new Size(360, 90);
             BackColor = Color.FromArgb(43, 33, 27);
             ShowInTaskbar = true;
-            Text = "AgentCraft";
+            Text = Title;
             Label l = new Label();
             l.Text = text;
             l.ForeColor = Color.FromArgb(240, 230, 210);
@@ -279,7 +376,7 @@ static class Launcher
 
         SettingsForm(Settings s)
         {
-            Text = "AgentCraft setup";
+            Text = "War Room setup";
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = MinimizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
@@ -287,7 +384,7 @@ static class Launcher
             ClientSize = new Size(520, 360);
 
             int y = 16;
-            Controls.Add(Lbl("Who works in your studio?", 16, y, true)); y += 30;
+            Controls.Add(Lbl("Who works in your War Room?", 16, y, true)); y += 30;
 
             sim.Text = "Demo team: scripted agents, free, no account needed";
             sim.SetBounds(24, y, 480, 24); Controls.Add(sim); y += 28;
@@ -302,7 +399,7 @@ static class Launcher
             get.LinkClicked += delegate { Process.Start("https://console.anthropic.com/settings/keys"); };
             Controls.Add(get); y += 30;
 
-            Controls.Add(Lbl("Project folder (a git repository the agents work on; you can also add one in game)", 44, y, false)); y += 22;
+            Controls.Add(Lbl("Project folder (a git repository the agents work on; you can also add one later)", 44, y, false)); y += 22;
             repo.SetBounds(44, y, 360, 24); repo.Text = s.Repo; Controls.Add(repo);
             Button browse = new Button();
             browse.Text = "Browse...";
@@ -357,12 +454,12 @@ static class Launcher
             {
                 if (!s.ApiKey.StartsWith("sk-ant-"))
                 {
-                    MessageBox.Show(this, "Enter your Anthropic API key (it starts with sk-ant-).", "AgentCraft");
+                    MessageBox.Show(this, "Enter your Anthropic API key (it starts with sk-ant-).", Title);
                     return;
                 }
                 if (s.Repo.Length > 0 && !Directory.Exists(Path.Combine(s.Repo, ".git")))
                 {
-                    MessageBox.Show(this, "The project folder must be the root of a git repository (it needs a .git folder).", "AgentCraft");
+                    MessageBox.Show(this, "The project folder must be the root of a git repository (it needs a .git folder).", Title);
                     return;
                 }
             }

@@ -17,9 +17,8 @@ Anthropic API key, their own repos, their own spend.
 
 The app is now called **War Room** (user's choice). Done: window title, header, office sign, server messages,
 Coworkers panel text, and the LAN protocol ids (`warroom` discovery, `warroom-peer` hello, `warroom-team:` code hash;
-old AgentCraft builds will not see new ones, which is fine pre-release). **Still named AgentCraft, rename with the
-installer rewrite:** the `~/.agentcraft` data folder (server.mjs `STATE`, foreman `--home`), `%LOCALAPPDATA%AgentCraft`,
-`src/Launcher.cs`, `src/AgentCraft.iss`, `build.ps1`, this repo folder. Keep upstream credit + license
+old AgentCraft builds will not see new ones, which is fine pre-release). **Installer now uses War Room names** (`~/.warroom`, `%LOCALAPPDATA%\WarRoom`, `WarRoom.exe`; see below).
+Still AgentCraft: server.mjs's *default* `STATE` (`~/.agentcraft`; the launcher passes `--state`), this repo folder. Keep upstream credit + license
 (the Foreman is blendi-remade/agentcraft). Check the name is not taken by other software before shipping.
 
 ## Architecture
@@ -138,12 +137,23 @@ On the new PC:
   attack each other") because AgentCraft agents are real coding agents with shell+repo access and a
   real bill — that's account abuse + remote takeover, and it's exactly the security gate the project
   exists to protect. The simulated version is fine; keep that line.
-- **Rewrite the installer to ship the studio app, not Minecraft.** Current `src/Launcher.cs`,
-  `src/AgentCraft.iss`, `build.ps1`, and `out/AgentCraft-Setup.exe` (196 MB) are the **STALE Minecraft
-  version** (bundles Java/Prism/Minecraft, Prism needs a Microsoft/Minecraft login). New installer
-  should bundle **Node + the studio app + the foreman** and have the launcher start foreman + studio
-  server and open an Edge `--app` window to the token URL. Drop Java/Prism/Minecraft. Target ~100 MB.
-  `downloads/` has node.zip/jre25.zip/prism.zip/mingit.zip; only node.zip is still needed.
+- **Installer — REWRITTEN for the studio app (2026-11-16, done on the slow PC while multiplayer/look
+  work went on elsewhere; it touches only `src/`, `build.ps1`).** `build.ps1` -> `out/WarRoom-Setup.exe`.
+  Bundles Node (`downloads/node.zip`) + **MinGit** (`downloads/mingit.zip`: the Foreman needs git for
+  the demo repo and the agents' worktrees) + the Foreman (sources + node_modules from `C:\dev\agentcraft`)
+  + `studio/server.mjs` + `studio/web`. No Java/Prism/Minecraft (`jre25.zip`, `prism.zip` are unused now).
+  Installs per-user to `%LOCALAPPDATA%\WarRoom` (new AppId; the old AgentCraft install is separate).
+  `WarRoom.exe` (`src/Launcher.cs`): first run shows the setup dialog (demo team or API key + repo +
+  budget; key stored with DPAPI in `~/.warroom/launcher.cfg`, copied once from `~/.agentcraft` if present),
+  starts the Foreman (`--home ~/.warroom`, :7878) and the studio server (`--state ~/.warroom/studio.json`,
+  :7880; peer file lands next to it), waits for the token, opens Edge `--app` with its own profile in
+  `%LOCALAPPDATA%\WarRoom\window` (falls back to the default browser). Re-running it reuses running
+  processes and just opens the window. `--stop` kills server + Foreman; `--settings` re-asks.
+  Agents keep running when the window closes (Start menu "Stop War Room" ends them).
+  **Not done / to check:** run the installer on a clean PC; Windows Firewall: the first time the server
+  listens on :7891 for coworkers, Windows asks to allow node.exe, and a non-admin user may not be able
+  to approve it. They can still connect *out* to coworkers, but nobody can connect *in* to them. Consider
+  a firewall rule in the installer (needs admin) or tell users to accept the prompt.
 - Note for the user: unsigned `.exe` → Windows SmartScreen warning (needs a code-signing cert).
 
 ## Conventions / gotchas
