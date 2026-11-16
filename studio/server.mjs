@@ -15,6 +15,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { spawn, execFile } from 'node:child_process';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const args = Object.fromEntries(
@@ -543,77 +544,130 @@ function splitHost(h) {
 // =============================================================================================
 // Arena brains: the thinking of the game's operatives (see web/arena.js)
 //
-// An operative is a game piece, NOT one of the Foreman's coding agents: it has no shell, no files and no
-// repository. The only things it can do are the game moves below, and those are defined here, on the server,
-// so nothing a window or a coworker sends can add a tool. Models: Haiku and Sonnet only. Every call is paid
-// by this studio's own key and counted against a budget that only this studio's window can set (never a peer),
-// with a hard ceiling (--arena-max, dollars). The key comes from ANTHROPIC_API_KEY or is typed in the window;
-// it stays in memory, is never written to disk or to the log, and never leaves for a coworker.
+// An operative is a game piece, NOT one of the Foreman's coding agents. One turn is one question to Claude,
+// asked through Claude Code exactly as Anthropic ships it (the binary inside the Foreman's packages, not
+// modified), started with every tool switched off, no settings, no MCP servers, in an empty folder. All it can
+// do is answer with ONE of the game moves below, and this server checks the answer. Nothing a window or a
+// coworker sends can add a tool or reach a file, a shell or a repository.
+// Who pays: this studio's own Claude sign-in (the player signs in to Claude Code themselves, in Anthropic's own
+// sign-in page; this server never sees or stores that token), or this studio's own API key (memory only, never
+// written to disk or to the log, never sent to a coworker). Models: Haiku and Sonnet only. The token budget of
+// a match is set by this studio's own window, never by a coworker, and has a hard ceiling (--arena-max-tokens).
 // =============================================================================================
-const ARENA_MAX = Math.max(0.05, Number(args['arena-max'] ?? 5));
-const MODELS = {            // dollars per million tokens (list prices, November 2026)
-  haiku: { id: 'claude-haiku-5-5', in: 0.10, out: 0.50, cw: 0.125, cr: 0.01 },
-  sonnet: { id: 'claude-sonnet-5-5', in: 2, out: 10, cw: 2.5, cr: 0.10 },
-};
-const move = (name, description, props) => ({
-  name, description, strict: true,
-  input_schema: { type: 'object', properties: { ...props, note: { type: 'string', description: 'One short line to remember for your next turn. May be empty.' } }, required: [...Object.keys(props), 'note'], additionalProperties: false },
-});
-const who = (d) => ({ who: { type: 'string', description: d } });
-const ARENA_TOOLS = [
-  move('go', 'Walk to a place.', { place: { type: 'string', description: 'A name from PLACES, exactly as written.' } }),
-  move('approach', 'Walk up to someone and stay next to them.', who('Name of a person from NEARBY, TEAM or ENEMIES.')),
-  move('say', 'Say something out loud. Everyone within 12 metres hears it, friend or enemy.', { text: { type: 'string', description: 'What you say, at most 200 characters.' } }),
-  move('attack', 'Fight an enemy operative or commander until they are down, or you are.', who('Name of an enemy.')),
-  move('arrest', 'Carry a knocked-out enemy operative to your own holding cells and lock them in.', who('Name of a knocked-out enemy operative.')),
-  move('free', 'Go to the cell that holds a teammate and unlock it from outside.', who('Name of a jailed teammate.')),
-  move('guard', 'Stand at a place and attack enemies who come close.', { place: { type: 'string', description: 'A name from PLACES, exactly as written.' } }),
-  move('join_team', 'Leave your team for good and work for another commander.', { team: { type: 'string', description: 'Name of the commander you now work for.' }, reason: { type: 'string', description: 'Why, in one line.' } }),
-  move('wait', 'Do nothing this turn.', {}),
-];
-const brain = { key: process.env.ANTHROPIC_API_KEY ?? '', source: process.env.ANTHROPIC_API_KEY ? 'env' : '', sdk: null, client: null, spent: 0, budget: Math.min(1, ARENA_MAX), calls: 0, busy: 0, plain: false };
+const ARENA_MAX_TOKENS = Math.max(10000, Number(args['arena-max-tokens'] ?? 3000000));
+const BRAIN_MODELS = { haiku: 'haiku', sonnet: 'sonnet' };      // Claude Code's own names for the current Haiku and Sonnet
+const MOVES = ['go', 'guard', 'approach', 'attack', 'arrest', 'free', 'say', 'join_team', 'wait'];
+// The answer of a turn is one line of JSON. (Asking Claude Code for "structured output" instead costs a second
+// round trip per turn: twice the tokens and seconds for the same move.)
+const MOVE_FORMAT = `Answer with ONLY one JSON object on a single line and nothing else:
+{"move": "<one of: ${MOVES.join(', ')}>", "target": "<go, guard: a place. approach, attack, arrest, free: a name. join_team: the team you join for good. Otherwise empty>", "text": "<say: your words, out loud. join_team: your reason. Otherwise empty>", "note": "<one short line to yourself for your next turn>"}`;
+function parseMove(s) {
+  if (typeof s !== 'string') return null;
+  const a = s.indexOf('{'), b = s.lastIndexOf('}');
+  if (a < 0 || b <= a) return null;
+  try { const o = JSON.parse(s.slice(a, b + 1)); return o && typeof o === 'object' && typeof o.move === 'string' ? o : null; } catch { return null; }
+}
+const CLAUDE_EXE = [
+  path.join(FOREMAN_DIR, 'node_modules', '@anthropic-ai', 'claude-agent-sdk-win32-x64', 'claude.exe'),
+  path.join(FOREMAN_DIR, 'node_modules', '@anthropic-ai', `claude-agent-sdk-${process.platform}-${process.arch}`, 'claude'),
+].find((p) => fs.existsSync(p)) ?? '';
+const BRAIN_DIR = path.join(os.tmpdir(), 'warroom-brain'), PROMPT_DIR = path.join(os.tmpdir(), 'warroom-brain-prompts');
+const brain = { key: process.env.ANTHROPIC_API_KEY ?? '', useKey: false, seat: null, seatAt: 0, spent: 0, budget: Math.min(300000, ARENA_MAX_TOKENS), calls: 0, running: 0 };
+// the environment of a Claude Code process: with our key, or with no key at all so that it uses the player's sign-in
+function brainEnv(via, model) {
+  const env = { ...process.env };
+  if (model === 'haiku') env.MAX_THINKING_TOKENS = '0';        // a move a turn needs no long thinking: it is most of the wait and of the tokens
+  for (const k of Object.keys(env)) if (['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'].includes(k.toUpperCase())) delete env[k];
+  if (via === 'key') env.ANTHROPIC_API_KEY = brain.key;
+  return env;
+}
+const brainVia = () => (brain.key && (brain.useKey || !brain.seat?.signedIn) ? 'key' : brain.seat?.signedIn ? 'seat' : '');
 function brainStatus() {
-  return { type: 'brain.status', ready: !!brain.key, source: brain.source, spent: +brain.spent.toFixed(5), budget: brain.budget, max: ARENA_MAX, calls: brain.calls };
+  const via = CLAUDE_EXE ? brainVia() : '';
+  return { type: 'brain.status', cli: !!CLAUDE_EXE, signedIn: !!brain.seat?.signedIn, plan: brain.seat?.plan ?? '', key: !!brain.key, via, ready: !!via, spent: brain.spent, budget: brain.budget, max: ARENA_MAX_TOKENS, calls: brain.calls };
+}
+// is the player signed in to Claude Code? ("claude auth status" answers in JSON and with its exit code)
+function checkSeat(then) {
+  if (!CLAUDE_EXE) { then?.(); return; }
+  brain.seatAt = Date.now();
+  execFile(CLAUDE_EXE, ['auth', 'status'], { env: brainEnv('seat'), timeout: 20000, windowsHide: true }, (err, stdout) => {
+    let j = null; try { j = JSON.parse(String(stdout).slice(String(stdout).indexOf('{'))); } catch { /* not signed in, or no answer */ }
+    const was = JSON.stringify(brain.seat);
+    brain.seat = { signedIn: !!j?.loggedIn && j.authMethod !== 'none', plan: str(j?.subscriptionType, 20) };
+    if (JSON.stringify(brain.seat) !== was) toApps(brainStatus());
+    then?.();
+  });
+}
+// open Anthropic's own sign-in (Claude Code's "auth login") in a console window of its own; it opens the browser
+let signinTimer = null;
+function brainSignIn(ws) {
+  if (!CLAUDE_EXE) { sendTo(ws, { type: 'notice', text: 'Claude Code is not part of this install, so there is nothing to sign in to. The demo brain still works.' }); return; }
+  try {
+    spawn('cmd.exe', ['/c', 'start', '"War Room - sign in to Claude"', 'cmd', '/c', `""${CLAUDE_EXE}" auth login & echo. & echo You can close this window. & pause"`],
+      { env: brainEnv('seat'), detached: true, stdio: 'ignore', windowsVerbatimArguments: true }).unref();
+  } catch (e) { sendTo(ws, { type: 'notice', text: `Could not start the Claude sign-in: ${e.message}` }); return; }
+  clearInterval(signinTimer);
+  let n = 0;
+  signinTimer = setInterval(() => { if (++n > 120 || brain.seat?.signedIn) clearInterval(signinTimer); else checkSeat(); }, 4000);
+}
+function runClaude(model, system, user, via) {
+  return new Promise((resolve) => {
+    fs.mkdirSync(BRAIN_DIR, { recursive: true }); fs.mkdirSync(PROMPT_DIR, { recursive: true });
+    const file = path.join(PROMPT_DIR, crypto.createHash('sha256').update(system).digest('hex').slice(0, 24) + '.txt');
+    if (!fs.existsSync(file)) fs.writeFileSync(file, system);
+    const t0 = Date.now();
+    const child = spawn(CLAUDE_EXE, ['-p', '--model', model, '--effort', 'low', '--system-prompt-file', file, '--tools', '', '--output-format', 'json',
+      '--no-session-persistence', '--setting-sources', '', '--strict-mcp-config', '--disable-slash-commands', '--max-turns', '1'],
+    { cwd: BRAIN_DIR, env: brainEnv(via, model), windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+    let out = '', done = false;
+    const finish = (r) => { if (done) return; done = true; clearTimeout(timer); resolve({ ...r, ms: Date.now() - t0 }); };
+    const timer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } finish({ error: 'timeout' }); }, 70000);
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (s) => { if (out.length < 400000) out += s; });
+    child.on('error', (e) => finish({ error: 'spawn: ' + e.message }));
+    child.on('close', () => { let j = null; try { j = JSON.parse(out.slice(out.indexOf('{'))); } catch { /* no answer */ } finish(j ? { j } : { error: 'no answer' }); });
+    child.stdin.on('error', () => {});
+    child.stdin.end(user);
+  });
 }
 async function brainThink(ws, m) {
-  const reply = (r) => sendTo(ws, { type: 'brain.result', rid: str(m.rid, 24), ...r, spent: +brain.spent.toFixed(5), budget: brain.budget });
-  const M = MODELS[m.model];
-  if (!M) return reply({ ok: false, why: 'model' });
-  if (!brain.key) return reply({ ok: false, why: 'nokey' });
+  const rid = str(m.rid, 24);
+  const reply = (x) => sendTo(ws, { type: 'brain.result', rid, ...x, spent: brain.spent, budget: brain.budget });
+  const model = BRAIN_MODELS[m.model];
+  if (!model) return reply({ ok: false, why: 'model' });
+  if (!CLAUDE_EXE) return reply({ ok: false, why: 'nocli' });
+  const via = brainVia();
+  if (!via) return reply({ ok: false, why: 'nokey' });
   if (brain.spent >= brain.budget) return reply({ ok: false, why: 'budget' });
-  if (brain.busy >= 4) return reply({ ok: false, why: 'busy' });
-  brain.busy++;
-  try {
-    if (!brain.sdk) { const mod = require('@anthropic-ai/sdk'); brain.sdk = mod.default ?? mod.Anthropic ?? mod; }
-    brain.client ??= new brain.sdk({ apiKey: brain.key, timeout: 40_000, maxRetries: 1 });
-    // the game rules and the team's rulebook are the same for the whole squad and the whole match: cached prefix
-    const body = {
-      model: M.id, max_tokens: 1024, output_config: { effort: 'low' },
-      system: [{ type: 'text', text: str(m.game, 6000) }, { type: 'text', text: str(m.rules, 6000) || '(This team has no rules.)', cache_control: { type: 'ephemeral' } }],
-      tools: ARENA_TOOLS,
-      messages: [{ role: 'user', content: str(m.user, 8000) || 'Your turn.' }],
-    };
-    let r;
-    if (m.model === 'sonnet' && !brain.plain) {
-      // Sonnet 5.5 can decline a turn for safety reasons; let the API hand such a turn to its fallback (also a Sonnet)
-      try { r = await brain.client.beta.messages.create({ ...body, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' }); }
-      catch (e) { if (!(e instanceof brain.sdk.BadRequestError)) throw e; brain.plain = true; r = await brain.client.messages.create(body); }
-    } else r = await brain.client.messages.create(body);
-    const u = r.usage ?? {};
-    const usage = { in: u.input_tokens ?? 0, out: u.output_tokens ?? 0, cw: u.cache_creation_input_tokens ?? 0, cr: u.cache_read_input_tokens ?? 0 };
-    const cost = (usage.in * M.in + usage.out * M.out + usage.cw * M.cw + usage.cr * M.cr) / 1e6;
-    brain.spent += cost; brain.calls++;
-    const call = r.content.find((b) => b.type === 'tool_use');
-    const said = r.content.filter((b) => b.type === 'text').map((b) => b.text).join(' ').slice(0, 300);
-    reply({ ok: true, tool: call ? { name: call.name, input: call.input } : null, text: said, stop: r.stop_reason, usage, cost });
-  } catch (e) {
-    const A = brain.sdk;
-    const why = !A ? 'sdk' : e instanceof A.AuthenticationError ? 'auth' : e instanceof A.RateLimitError ? 'rate' : e instanceof A.APIError ? 'api' : 'error';
-    if (why === 'auth') brain.client = null;
-    log(`arena brain: ${why}${e?.status ? ' ' + e.status : ''}`);
-    reply({ ok: false, why });
-  } finally { brain.busy--; }
+  if (brain.running >= 6) return reply({ ok: false, why: 'busy' });
+  const system = `${str(m.game, 8000)}\n\n${str(m.rules, 6000)}\n\n${MOVE_FORMAT}`, user = str(m.user, 9000);
+  brain.running++;
+  let r;
+  try { r = await runClaude(model, system, user, via); } finally { brain.running--; }
+  const j = r.j;
+  if (!j) return reply({ ok: false, why: 'error', detail: r.error });
+  let tin = 0, tout = 0, cr = 0, cw = 0, name = '';
+  for (const [k, u] of Object.entries(j.modelUsage ?? {})) {
+    tin += num(u.inputTokens, 0, 1e9); tout += num(u.outputTokens, 0, 1e9); cr += num(u.cacheReadInputTokens, 0, 1e9); cw += num(u.cacheCreationInputTokens, 0, 1e9);
+    if (!name || num(u.outputTokens, 0, 1e9) > 60) name = k;
+  }
+  const tokens = Math.round(tin + tout + cr + cw);
+  brain.spent += tokens; brain.calls++;
+  const so = j.is_error ? null : parseMove(j.result);
+  const usage = { in: Math.round(tin), out: Math.round(tout), cr: Math.round(cr), cw: Math.round(cw) };
+  if (!so && !j.is_error) return reply({ ok: true, tool: null, usage, tokens, model: str(name, 40), via, ms: r.ms });      // it answered, but not with a move
+  if (!so) {
+    const s = str(typeof j.result === 'string' ? j.result : '', 300);
+    const why = /log ?in|logged|authenticat|api key|401|oauth|credential/i.test(s) ? 'auth' : /rate limit|usage limit|429|overloaded|quota/i.test(s) ? 'rate' : 'error';
+    if (why === 'auth' && via === 'seat') { brain.seat = { signedIn: false, plan: '' }; toApps(brainStatus()); }
+    log(`arena brain: ${why}${why === 'error' ? ' (' + (str(j.subtype, 40) || 'no move') + ')' : ''}`);
+    return reply({ ok: false, why, detail: s.slice(0, 160), tokens });
+  }
+  const move = MOVES.includes(so.move) ? so.move : 'wait', target = str(so.target, 60), text = str(so.text, 300), note = str(so.note, 200);
+  const input = move === 'go' || move === 'guard' ? { place: target } : ['approach', 'attack', 'arrest', 'free'].includes(move) ? { who: target } : move === 'say' ? { text } : move === 'join_team' ? { team: target, reason: text } : {};
+  reply({ ok: true, tool: { name: move, input: { ...input, note } }, usage, tokens, cost: num(j.total_cost_usd, 0, 1000), model: str(name, 40), via, ms: r.ms });
 }
+checkSeat();
 
 // --- the studio window(s) on this machine ----------------------------------------------------
 const apps = new Set();
@@ -670,20 +724,20 @@ function worldApp(ws) {
       case 'host.start': { const no = startHosting(); if (no) sendTo(ws, { type: 'notice', text: no }); break; }
       case 'host.stop': stopHosting(); break;
       case 'brain.think': brainThink(ws, m); break;
-      case 'brain.key': {
+      case 'brain.key': {                    // typed in the window: kept in memory only
         const k = str(m.key, 300).trim();
         if (k && !/^sk-ant-[\w-]{20,280}$/.test(k)) { sendTo(ws, { type: 'notice', text: 'That does not look like an Anthropic API key (sk-ant-...).' }); break; }
-        if (k) { brain.key = k; brain.source = 'window'; } else { brain.key = process.env.ANTHROPIC_API_KEY ?? ''; brain.source = brain.key ? 'env' : ''; }
-        brain.client = null;
+        brain.key = k || (process.env.ANTHROPIC_API_KEY ?? ''); brain.useKey = !!k;
         toApps(brainStatus());
         break;
       }
       case 'brain.budget':                   // a new match: a new budget, counted from zero
-        brain.budget = Math.max(0.05, Math.min(ARENA_MAX, num(m.usd, 0, 1000) || 1));
+        brain.budget = Math.round(Math.max(5000, Math.min(ARENA_MAX_TOKENS, num(m.tokens, 0, 1e9) || 300000)));
         brain.spent = 0; brain.calls = 0;
         toApps(brainStatus());
         break;
-      case 'brain.status': sendTo(ws, brainStatus()); break;
+      case 'brain.signin': brainSignIn(ws); break;
+      case 'brain.status': if (Date.now() - brain.seatAt > 20000) checkSeat(() => sendTo(ws, brainStatus())); else sendTo(ws, brainStatus()); break;
     }
   });
   ws.on('close', () => { apps.delete(ws); if (!apps.size) { self.pos = null; toPeers({ t: 'pos', anchor: '', dx: 0, dz: 0, rot: 0, moving: false }); toPeers({ t: 'g', k: 'away', d: {} }); } });

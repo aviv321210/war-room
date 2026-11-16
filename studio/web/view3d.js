@@ -927,7 +927,7 @@ function sendMe() { netSend({ type: 'me', name: me.look?.name || S.foreman?.user
 
 function onNet(m) {
   switch (m.type) {
-    case 'self': { const was = net.self?.session?.mode; net.self = m; assignLots(); updatePeerChip(); if (was !== m.session?.mode) { sendOffice(); Arena?.onSession?.(); } break; }
+    case 'self': { const was = net.self?.session?.mode; net.self = m; assignLots(); updatePeerChip(); if (was !== m.session?.mode) { sendOffice(); Arena?.onSession(); } break; }
     case 'peer.join': upsertPeer(m.peer); break;
     case 'peer.presence': { const p = peersV.get(m.id); if (p) { p.name = m.name; p.look = m.look; refreshPeerLook(p); } break; }
     case 'peer.office': { const p = peersV.get(m.id); if (p) p.office = m.office; break; }
@@ -994,7 +994,7 @@ function onOfficeMsg(p, k, d) {
     p.of = of;
     if (!was || was.id !== of.id || was.ok !== of.ok || was.slot !== of.slot || was.name !== of.name || was.born !== of.born) assignLots();
   } else if (k === 'of.move') {                   // the organiser of the session puts you in an office
-    if (p.id !== hostId() || Arena?.inMatch?.()) return;
+    if (p.id !== hostId() || Arena?.inMatch()) return;
     setOffice({ ...of, name: of.name || 'Office' });
     AC.toast(`${p.name} moved you to ${myOfficeName()}.`);
   }
@@ -1052,11 +1052,11 @@ function assignLots() {
   for (const L of fresh) Town?.dressLot(L);
   paintMySign();
   const key = [...groups.values()].map((g) => `${g.id}:${g.slot}:${g.name}:${g.members.join('.')}`).sort().join('|');
-  if (key !== officesKey) { officesKey = key; Town?.dressLot(MYLOT); Arena?.onOffices?.(); if (AC.modalKind() === 'offices') openOffices(true); }
+  if (key !== officesKey) { officesKey = key; Town?.dressLot(MYLOT); Arena?.onOffices(); if (AC.modalKind() === 'offices') openOffices(true); }
 }
 function canSwitch() {
-  if (Arena?.inMatch?.()) { AC.toast('Not during a match.', 'warn'); return false; }
-  if (Arena?.locked?.() && !iAmHost()) { AC.toast('The organiser has locked the offices for now.', 'warn'); return false; }
+  if (Arena?.inMatch()) { AC.toast('Not during a match.', 'warn'); return false; }
+  if (Arena?.locked() && !iAmHost()) { AC.toast('The organiser has locked the offices for now.', 'warn'); return false; }
   return true;
 }
 function setOffice(of) {
@@ -1065,7 +1065,7 @@ function setOffice(of) {
   saveOffice();
   assignLots();
   sendOffice();
-  if (moved) { me.x = 16; me.z = 23.6; me.y = 0; Town?.moved(); Arena?.onOffices?.(); }
+  if (moved) { me.x = 16; me.z = 23.6; me.y = 0; Town?.moved(); Arena?.onOffices(); }
 }
 function freeSlot() {
   const used = new Set([...offices.values()].filter((g) => g.id !== office.id || office.ok).map((g) => g.slot));

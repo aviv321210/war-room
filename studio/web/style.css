@@ -304,3 +304,18 @@ kbd { background: var(--paper); color: var(--ink); border-radius: 4px; padding: 
 .arena details li, .arena .trace li, .arena .events li { font-size: 12px; margin: 2px 0; }
 .arena .trace ul, .arena .events { margin: 2px 0 8px; padding-left: 18px; }
 .arena .lesson { background: #f6ded7; color: #3d2a1e; border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+
+/* offices, organiser, review of everybody's rules, voice */
+.offices select { font-size: 12px; margin-left: 4px; max-width: 150px; }
+.offices .peers li button { margin-left: 6px; }
+.arena .row.wrap { flex-wrap: wrap; gap: 6px 16px; align-items: center; }
+.arena .keybox { flex: 1 1 100%; }
+.arena .keybox summary { cursor: pointer; font-size: 12px; color: var(--text-soft); }
+.arena .reveals .team { border: 1px solid #c9bda9; border-radius: 6px; padding: 6px 10px; margin: 6px 0; background: #fffaf0; }
+.arena .reveals .team.won { border-color: #c9a227; box-shadow: 0 0 0 2px rgba(201,162,39,.25); }
+.arena .reveals h4 { margin: 2px 0 4px; font-size: 14px; }
+.arena pre.rules { white-space: pre-wrap; font: 12px/1.4 Consolas, monospace; background: #1a1410; color: #f4efe6; border-radius: 5px; padding: 6px 8px; margin: 4px 0; max-height: 140px; overflow: auto; }
+.arena pre.rules.own { background: #2c241d; }
+.voice-chip { position: absolute; left: 10px; bottom: 10px; z-index: 5; background: rgba(26,20,16,.82); color: var(--text); border: 1px solid var(--brass); border-radius: 8px; padding: 5px 9px; font-size: 12px; cursor: pointer; user-select: none; }
+.voice-chip.live { border-color: #6fbf5a; box-shadow: 0 0 0 2px rgba(111,191,90,.35); }
+.plate.peer.talking { border-color: #6fbf5a; box-shadow: 0 0 0 2px rgba(111,191,90,.45); }

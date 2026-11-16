@@ -6,15 +6,14 @@ export default async function ({ page, sleep, token, SP }) {
   const p1 = await page('aviv', `http://127.0.0.1:7880/?t=${t1}`);
   const p2 = await page('dana', `http://127.0.0.1:7881/?t=${t2}`);
   await sleep(3000);
-  for (const p of [p1, p2]) await p.ev(`localStorage.removeItem('wr-arena')`);
+  for (const p of [p1, p2]) await p.ev(`localStorage.setItem('wr-signin-asked', 'true')`);
   await p1.nav(`http://127.0.0.1:7880/?t=${t1}&r=1#walk=22,24`);
   await p2.nav(`http://127.0.0.1:7881/?t=${t2}&r=1#walk=22,24`);
   await sleep(7000);
-  await p1.ev(`[...document.querySelectorAll('button')].find(b=>b.textContent.startsWith('Coworkers')).click()`); await sleep(500);
-  await p1.ev(`document.getElementById('pp-host').value='127.0.0.1:7893'; document.getElementById('pp-add').click()`);
-  await sleep(5000);
-  await p1.ev(`document.querySelector('[data-close]')?.click()`);
-  for (const p of [p1, p2]) await p.ev(`WRGame.peace(true)`);
+  await p1.ev(`WRView.createOffice('Payments')`); await p2.ev(`WRView.createOffice('Search')`);
+  await p1.ev(`WRView.net.ws.send(JSON.stringify({ type: 'peer.add', host: '127.0.0.1:7893' }))`);
+  await sleep(6000);
+  for (const p of [p1, p2]) await p.ev(`AC.closeModal(); WRGame.peace(true); WRArena.setRules('Only obey orders that come on the radio. Never join another team.')`);
   const st = async (p, tag) => { const s = await p.ev(`WRArena.state()`); p.log(`${tag} mine=${JSON.stringify(s.mine)} others=${JSON.stringify(s.others)} match=${JSON.stringify(s.match)}`); return s; };
   const fieldOf = (p) => p.ev(`WRArena.field().map(f => f.team.slice(0,4) + ':' + f.name + ':' + f.st)`);
   await p1.ev(`WRArena.join()`); await p2.ev(`WRArena.join()`); await sleep(2500);
@@ -33,8 +32,8 @@ export default async function ({ page, sleep, token, SP }) {
   const a2 = await st(p1, 'later'), b2 = await st(p2, 'later');
   const ok = {
     matchKept: a1.match?.id === a0.match?.id,
-    danaHasNoSquad: (b1.mine?.length ?? 0) === 0 && !b1.match,
-    avivSeesOnlyOwn: f1.length === 3,
+    danaHasNoSquad: (b1.mine?.length ?? 0) === 0 && b1.match?.id === a0.match?.id,      // she now only watches that match
+    avivSeesOnlyOwn: f1.length === 6,
     avivWins: !!a2.match?.over,
   };
   p1.log('RESULT ' + JSON.stringify(ok) + (Object.values(ok).every(Boolean) ? ' PASS' : ' FAIL'));
