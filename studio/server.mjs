@@ -229,6 +229,9 @@ function sendTo(ws, m) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stri
 function toPeers(m) { for (const p of peers.values()) sendTo(p.ws, m); }
 function proof() { return self.code ? crypto.createHash('sha256').update('warroom-team:' + self.code).digest('hex').slice(0, 32) : ''; }
 function hello() { return { t: 'hello', app: 'warroom-peer', v: 1, id: self.id, name: self.name, proof: proof() }; }
+// a team-code mismatch is retried every few seconds: tell the window once per address, until the code changes
+const refusedSeen = new Set();
+function codeNotice(addr, text) { if (refusedSeen.has(addr) || refusedSeen.size > 50) return; refusedSeen.add(addr); toApps({ type: 'notice', text }); }
 function peerView(p) { return { id: p.id, name: p.name, look: p.look, office: p.office, pos: p.pos, addr: p.addr }; }
 
 function attachPeer(ws, addr, outbound) {
@@ -241,9 +244,14 @@ function attachPeer(ws, addr, outbound) {
     if (--budget < 0) return;
     let m; try { m = JSON.parse(data.toString()); } catch { return; }
     if (!peer) {
-      if (m.t === 'denied') { log(`peer ${addr} refused us: ${str(m.why, 60)}`); ws.close(); return; }
+      if (m.t === 'denied') { log(`peer ${addr} refused us: ${str(m.why, 60)}`); codeNotice(addr, `${addr} did not let you in: their team code is different from yours.`); ws.close(); return; }
       if (m.t !== 'hello' || m.app !== 'warroom-peer' || typeof m.id !== 'string' || !/^[a-f0-9]{16}$/.test(m.id) || m.id === self.id) { ws.close(); return; }
-      if (str(m.proof, 64) !== proof()) { sendTo(ws, { t: 'denied', why: 'different team code' }); ws.close(); return; }
+      if (str(m.proof, 64) !== proof()) {
+        sendTo(ws, { t: 'denied', why: 'different team code' });
+        codeNotice(addr, `${str(m.name, 24) || 'Someone'} (${addr}) tried to join with a different team code.`);
+        ws.close(); return;
+      }
+      refusedSeen.delete(addr);
       const old = peers.get(m.id);
       if (old && old.ws.readyState === WebSocket.OPEN) { ws.close(); return; }   // already connected the other way
       clearTimeout(timer);
@@ -381,6 +389,7 @@ function worldApp(ws) {
       case 'code':
         self.code = str(m.code, 64);
         savePeerCfg();
+        refusedSeen.clear();
         for (const p of peers.values()) { sendTo(p.ws, { t: 'bye' }); p.ws.close(); }   // reconnect under the new code
         toApps(selfView());
         break;

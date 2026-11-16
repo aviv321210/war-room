@@ -28,6 +28,11 @@ body {
   background: var(--bg); color: var(--text); font: 14px/1.4 var(--sans);
   display: grid; grid-template-rows: auto auto 1fr auto; overflow: hidden;
 }
+/* pin the rows: a hidden banner leaves the grid, and main would slide into its auto row */
+body > header { grid-row: 1; }
+#banner { grid-row: 2; }
+main { grid-row: 3; }
+#console { grid-row: 4; }
 button {
   font: inherit; cursor: pointer; border-radius: 6px; padding: 6px 12px;
   border: 1px solid #8a6d1f; background: linear-gradient(#d9b545, #b98f1c); color: #2a1d08; font-weight: 600;
@@ -232,3 +237,45 @@ kbd { background: var(--paper); color: var(--ink); border-radius: 4px; padding: 
 .kanban.light { max-height: 50vh; gap: 8px; margin: 10px 0; }
 .kanban.light .col h3 { color: var(--ink-soft); }
 .kanban.light .card { background: #fffaf1; border: 1px solid #e0d4c0; border-top-width: 3px; cursor: default; }
+
+/* ---- the play layer (game.js): hearts, hotbar, backpack ---- */
+.playing .help3d { bottom: auto; top: 10px; }
+.playing .hint { bottom: 132px; }
+.hud { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); z-index: 2; display: flex; flex-direction: column; gap: 4px; align-items: stretch; user-select: none; }
+.hud img, .bag img { image-rendering: pixelated; }
+.hud .vitals { display: flex; justify-content: space-between; align-items: center; }
+.hud .hearts { display: flex; gap: 1px; }
+.hud .hearts img { width: 18px; height: 18px; }
+.hud .sky { font: 700 11px var(--mono); padding: 1px 8px; border-radius: 4px; background: rgba(22, 16, 12, .8); color: #e6c45a; }
+.hud .sky.night { color: #9fb6e8; }
+.hud .sky.dusk, .hud .sky.dawn { color: #e59a6a; }
+.hud .xp { position: relative; height: 7px; background: #120d0a; border: 1px solid #000; border-radius: 2px; }
+.hud .xpfill { height: 100%; background: linear-gradient(#b6f05a, #6fbf2c); transition: width .3s; }
+.hud .lvl { position: absolute; left: 50%; top: -15px; transform: translateX(-50%); font: 700 12px var(--mono); color: #b6f05a; text-shadow: 0 1px 0 #000, 1px 0 0 #000, -1px 0 0 #000, 0 -1px 0 #000; }
+.hud .hotbar { display: flex; gap: 0; padding: 3px; background: rgba(22, 16, 12, .88); border: 2px solid #120d0a; border-radius: 4px; box-shadow: 0 0 0 1px rgba(255, 255, 255, .08) inset; }
+.slot { position: relative; width: 44px; height: 44px; background: #4a3a30; border: 2px solid; border-color: #2a1f18 #6b574a #6b574a #2a1f18; display: grid; place-items: center; cursor: pointer; }
+.slot img { width: 32px; height: 32px; }
+.slot .n { position: absolute; right: 2px; bottom: 0; font: 700 12px var(--mono); color: #fff; text-shadow: 1px 1px 0 #000, -1px 1px 0 #000, 1px -1px 0 #000; }
+.slot .k { position: absolute; left: 3px; top: 0; font: 10px var(--mono); color: rgba(255, 255, 255, .45); }
+.slot.on { border-color: #f4efe6; box-shadow: 0 0 0 2px var(--brass); z-index: 1; }
+.slot.sel { background: #5d4a3c; }
+.hud .itemname { position: absolute; left: 0; right: 0; top: -22px; text-align: center; font-weight: 700; text-shadow: 0 1px 2px #000; pointer-events: none; }
+.hurt { position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 90px 30px rgba(216, 64, 47, .75); opacity: 0; z-index: 1; }
+.hurt.on { animation: hurt .45s ease-out; }
+@keyframes hurt { from { opacity: 1; } to { opacity: 0; } }
+.float { position: absolute; transform: translate(-50%, -100%); font: 700 13px var(--mono); color: #fff; text-shadow: 1px 1px 0 #000, -1px 1px 0 #000, 1px -1px 0 #000, -1px -1px 0 #000; white-space: nowrap; pointer-events: none; }
+.float.dmg { color: #ff8a7a; }
+.float.xp { color: #b6f05a; }
+.bag { display: grid; grid-template-columns: auto 1fr; gap: 22px; align-items: start; }
+.bag .grid { display: grid; grid-template-columns: repeat(9, 44px); }
+.bag h3 { margin: 12px 0 6px; }
+.bag .craft h3 { margin-top: 0; }
+.bag .craft { display: flex; flex-direction: column; gap: 6px; min-width: 300px; }
+.recipe { display: grid; grid-template-columns: 32px 1fr; grid-template-rows: auto auto; column-gap: 10px; text-align: left; align-items: center; padding: 6px 10px; }
+.recipe > img { width: 32px; height: 32px; grid-row: 1 / 3; }
+.recipe .needs { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--ink-soft); }
+.recipe .cost { display: inline-flex; align-items: center; gap: 4px; }
+.recipe .cost img { width: 16px; height: 16px; }
+.recipe .cost.short { color: #b9543f; }
+.recipe:disabled { opacity: .55; cursor: default; }
+.m-foot .muted { margin-right: auto; }

@@ -1,6 +1,8 @@
 // War Room: the 3D view. Same room plan and agents as the 2D view (tile units -> metres:
 // tile (x, y) = world (x, 0, y)), drawn with three.js from AgentCraft's own textures and skins.
 import * as THREE from './vendor/three.module.min.js';
+import { initGame } from './game.js';
+let Game = null;                 // the play layer (blocks, backpack, bugs): see game.js
 
 const AC = window.AC;
 const { S, actors, DESKS, deskOf } = AC;
@@ -351,7 +353,8 @@ const freeLots = PLOTS.map((px) => {
 });
 
 // lights: soft ambient + a sun that follows you (its shadows cover the area around you)
-scene.add(new THREE.HemisphereLight('#fff3df', '#3a2a20', 1.6));
+const hemi = new THREE.HemisphereLight('#fff3df', '#3a2a20', 1.6);
+scene.add(hemi);
 const sun = new THREE.DirectionalLight('#fff1d6', 2.2);
 sun.position.set(8, 30, 30); sun.target.position.set(16, 0, 14);
 sun.castShadow = true;
@@ -628,7 +631,7 @@ function setMode(m) {
   if (m === 'overview') placeCamera();
   hint.hidden = true;
   help.innerHTML = m === 'walk'
-    ? '<b>WASD</b> walk &middot; <b>Shift</b> run &middot; <b>drag</b> look &middot; <b>wheel</b> zoom &middot; <b>E</b> interact &middot; <b>Enter</b> console'
+    ? '<b>WASD</b> walk &middot; <b>Shift</b> run &middot; <b>Space</b> jump &middot; <b>drag</b> look &middot; <b>click</b> hit &middot; <b>right-click</b> build &middot; <b>1-9</b> item &middot; <b>I</b> backpack &middot; <b>E</b> interact &middot; <b>Enter</b> console'
     : '<b>drag</b> rotate &middot; <b>right-drag</b> move &middot; <b>wheel</b> zoom &middot; <b>click</b> an agent or the podium &middot; <b>Walk</b> to play as your avatar';
 }
 const inside = () => me.x > 0 && me.x < 32 && me.z > 0 && me.z < 20.2;
@@ -639,7 +642,6 @@ const overlayEl = document.getElementById('overlay');
 const myPlate = document.createElement('div'); myPlate.className = 'plate me'; overlayEl.append(myPlate);
 const hint = document.createElement('div'); hint.className = 'hint'; hint.hidden = true; floorEl.append(hint);
 const help = document.createElement('div'); help.className = 'help3d';
-help.innerHTML = '<b>WASD</b> walk &middot; <b>Shift</b> run &middot; <b>drag</b> look &middot; <b>wheel</b> zoom &middot; <b>E</b> interact &middot; <b>Enter</b> console';
 floorEl.append(help);
 
 // keyboard
@@ -671,8 +673,8 @@ function moveAvatar(dt) {
   mx /= len; mz /= len;
   const step = (keys.has('shift') ? 7 : 4.2) * dt;
   const nx = Math.max(-160, Math.min(190, me.x + mx * step)), nz = Math.max(-80, Math.min(110, me.z + mz * step));
-  if (!blocked(nx, me.z)) me.x = nx;
-  if (!blocked(me.x, nz)) me.z = nz;
+  if (!blocked(nx, me.z) && !Game?.blocksMove(nx, me.z)) me.x = nx;
+  if (!blocked(me.x, nz) && !Game?.blocksMove(me.x, nz)) me.z = nz;
   me.heading = Math.atan2(mx, mz);
 }
 function animate(f, moving, seated, t) {
@@ -691,7 +693,7 @@ function updateAvatar(now, dt) {
   const want = me.moving ? me.heading : me.fig.rot;
   const diff = ((want - me.fig.rot + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
   me.fig.rot += diff * Math.min(1, dt * 12);
-  me.fig.root.position.set(me.x, 0, me.z);
+  me.fig.root.position.set(me.x, me.y ?? 0, me.z);
   me.fig.root.rotation.y = me.fig.rot;
   animate(me.fig, me.moving, false, now / 1000);
 }
@@ -701,8 +703,9 @@ const camRay = new THREE.Raycaster();
 
 const head = new THREE.Vector3(), want = new THREE.Vector3(), dir = new THREE.Vector3();
 function placeWalkCamera() {
-  head.set(me.x, 1.55, me.z);
-  want.set(me.x + Math.sin(cam.yaw) * Math.cos(cam.pitch) * cam.dist, 1.55 + Math.sin(cam.pitch) * cam.dist, me.z + Math.cos(cam.yaw) * Math.cos(cam.pitch) * cam.dist);
+  const eye = 1.55 + (me.y ?? 0);
+  head.set(me.x, eye, me.z);
+  want.set(me.x + Math.sin(cam.yaw) * Math.cos(cam.pitch) * cam.dist, eye + Math.sin(cam.pitch) * cam.dist, me.z + Math.cos(cam.yaw) * Math.cos(cam.pitch) * cam.dist);
   dir.copy(want).sub(head);
   const len = dir.length(); dir.normalize();
   camRay.set(head, dir); camRay.far = len;
@@ -769,7 +772,7 @@ el.addEventListener('pointermove', (e) => {
 });
 el.addEventListener('pointerup', (e) => {
   el.style.cursor = 'grab';
-  if (drag && drag.moved < 6) click(e);
+  if (drag && drag.moved < 6) { if (e.button === 2) Game?.use(); else click(e); }
   drag = null;
 });
 el.addEventListener('wheel', (e) => {
@@ -787,8 +790,9 @@ function pick(e) {
   return ray.intersectObjects(targets, true)[0]?.object ?? null;
 }
 function click(e) {
+  if (mode === 'walk' && Game?.hit()) return;          // a bug or a block was in reach
   const o = pick(e);
-  if (!o) return;
+  if (!o) { if (mode === 'walk') Game?.swing(); return; }
   if (o.userData.agentId) AC.openAgent(o.userData.agentId);
   else if (o.userData.click) o.userData.click();
 }
@@ -812,7 +816,7 @@ function resize() {
 const myPos = new THREE.Vector3();
 function placeMyPlate() {
   if (!me.fig) { myPlate.hidden = true; return; }
-  myPos.set(me.x, 34 * PX + 0.15, me.z).project(camera);
+  myPos.set(me.x, (me.y ?? 0) + 34 * PX + 0.15, me.z).project(camera);
   const w = floorEl.clientWidth, h = floorEl.clientHeight;
   myPlate.hidden = myPos.z > 1;
   const html = `<div class="who">${AC.esc(me.look.name)}</div><div class="what">you</div>`;
@@ -846,7 +850,7 @@ function sendMe() { netSend({ type: 'me', name: me.look?.name || S.foreman?.user
 
 function onNet(m) {
   switch (m.type) {
-    case 'self': net.self = m; updatePeerChip(); if (AC.modalKind() === 'peers') renderPeersPanel(); break;
+    case 'self': net.self = m; updatePeerChip(); break;
     case 'peer.join': upsertPeer(m.peer); break;
     case 'peer.presence': { const p = peersV.get(m.id); if (p) { p.name = m.name; p.look = m.look; refreshPeerLook(p); } break; }
     case 'peer.office': { const p = peersV.get(m.id); if (p) p.office = m.office; break; }
@@ -1107,11 +1111,14 @@ function updatePeerChip() {
   const n = peersV.size;
   btnPeers.innerHTML = `Coworkers <span class="count${n ? ' on' : ''}">${n}</span>`;
   btnPeers.title = net.self?.lan === false ? 'LAN is off' : 'Coworkers on the LAN: connect, team code';
+  if (AC.modalKind() === 'peers') renderPeersPanel(true);      // someone joined or left, or our settings changed
 }
 updatePeerChip();
-function renderPeersPanel() {
+function renderPeersPanel(refresh) {
   const s = net.self;
   const list = [...peersV.values()];
+  // a refresh must not eat what is being typed
+  const typed = refresh ? { host: document.getElementById('pp-host')?.value, code: document.getElementById('pp-code')?.value, focus: document.activeElement?.id } : null;
   AC.modal('peers', '', `
     <div class="m-head"><h1>Coworkers <span class="sub">your campus on the local network</span></h1><button class="x" data-close aria-label="Close">&times;</button></div>
     <div class="m-body">
@@ -1127,7 +1134,10 @@ function renderPeersPanel() {
       <div class="row"><input type="password" id="pp-code" value="${AC.esc(s?.code ?? '')}" placeholder="no code"><button class="quiet" id="pp-save">Save code</button></div>
       <p class="muted">Shared with coworkers: your name and avatar, where you walk, chat, and your team's activity (agents' status lines, task titles, progress). Never logs, diffs or code, and nobody else can answer your agents.</p>
     </div>`);
-  const add = () => { const h = document.getElementById('pp-host').value.trim(); if (h) { netSend({ type: 'peer.add', host: h }); AC.toast(`Connecting to ${h}...`); } };
+  if (typed?.host) document.getElementById('pp-host').value = typed.host;
+  if (typeof typed?.code === 'string') document.getElementById('pp-code').value = typed.code;
+  if (typed?.focus === 'pp-host' || typed?.focus === 'pp-code') document.getElementById(typed.focus).focus();
+  const add = () => { const h = document.getElementById('pp-host').value.trim(); if (h) { document.getElementById('pp-host').value = ''; netSend({ type: 'peer.add', host: h }); AC.toast(`Connecting to ${h}...`); } };
   document.getElementById('pp-add').onclick = add;
   document.getElementById('pp-host').onkeydown = (e) => { if (e.key === 'Enter') add(); };
   document.getElementById('pp-save').onclick = () => { netSend({ type: 'code', code: document.getElementById('pp-code').value }); AC.toast('Team code saved. Reconnecting...'); };
@@ -1146,6 +1156,10 @@ function updatePeers(now, dt) {
   sun.target.position.set(fx, 0, fz); sun.position.set(fx - 8, 30, fz + 16);
 }
 
+Game = initGame({
+  THREE, scene, camera, el, floorEl, overlayEl, me, mat, AC, S, sun, hemi, PLOTS, blocked, busy, toScreen,
+  getMode: () => mode, isVisible: () => !!window.View3D?.visible,
+});
 setMode(mode);
 window.View3D = {
   visible: false,
@@ -1153,7 +1167,7 @@ window.View3D = {
     this.visible = v;
     el.style.display = v ? 'block' : 'none';
     for (const x of [btnMode, btnAvatar, help]) x.style.display = v ? '' : 'none';
-    myPlate.hidden = !v; if (!v) { hint.hidden = true; peerPlates(); placeMySay(); }
+    myPlate.hidden = !v; if (!v) { hint.hidden = true; peerPlates(); placeMySay(); Game?.show(false); }
   },
   chat: (text) => chat(text),
   render(now, dt) {
@@ -1162,6 +1176,7 @@ window.View3D = {
     updateCards();
     updateDesks();
     updateAvatar(now, dt);
+    Game?.update(now, dt);
     roof.visible = walkOutside();
     frontWall.visible = mode === 'walk';
     if (mode === 'walk' && me.fig) placeWalkCamera();

@@ -1,7 +1,8 @@
 // drives studio #2's /world socket like its window would: adds studio #1 as a coworker, walks, chats
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
-const require = createRequire('C:/dev/agentcraft/foreman/package.json');
+// ws comes from the upstream foreman, cloned next to this repo (../agentcraft); override with FOREMAN_DIR
+const require = createRequire(new URL(process.env.FOREMAN_DIR ? `file:///${process.env.FOREMAN_DIR.replace(/\\/g, '/')}/package.json` : '../../../agentcraft/foreman/package.json', import.meta.url));
 const { WebSocket } = require('ws');
 const st = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const ws = new WebSocket(`ws://127.0.0.1:${st.port}/world`, { headers: { Origin: `http://127.0.0.1:${st.port}`, Cookie: `ac_token=${st.token}` } });

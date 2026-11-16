@@ -1,6 +1,6 @@
 # War Room (formerly AgentCraft) — session handoff
 
-_For the next Claude Code session. Read this first. Everything lives on `C:\dev\agentcraft-dist` (the custom app) and `C:\dev\agentcraft` (the upstream repo clone)._
+_For the next Claude Code session. Read this first. Everything lives on `D:\Aviv\Projects\war-room` (this repo, the custom app) and `D:\Aviv\Projects\agentcraft` (the upstream repo clone)._
 
 ## What this project is
 
@@ -23,8 +23,8 @@ Still AgentCraft: server.mjs's *default* `STATE` (`~/.agentcraft`; the launcher 
 
 ## Architecture
 
-- **Foreman** (`C:\dev\agentcraft\foreman`, Node/TS) — the real thing: runs the Claude agents, owns
-  all state, serves `ws://127.0.0.1:7878`. Protocol in `C:\dev\agentcraft\docs\protocol.md`
+- **Foreman** (`D:\Aviv\Projects\agentcraft\foreman`, Node/TS) — the real thing: runs the Claude agents, owns
+  all state, serves `ws://127.0.0.1:7878`. Protocol in `D:\Aviv\Projects\agentcraft\docs\protocol.md`
   (v1; snapshot + upserts). It **rejects any WebSocket with an `Origin` header** (so a browser can't
   drive it) — this is why our app talks to it through a local bridge, never directly.
 - **Studio server** `studio/server.mjs` (Node) — serves the web app on `127.0.0.1:7880` behind a
@@ -38,7 +38,7 @@ Still AgentCraft: server.mjs's *default* `STATE` (`~/.agentcraft`; the launcher 
 ## Machine state (already done)
 
 - winget-installed: Temurin **Java 25**, Prism Launcher, Inno Setup 6. **Node upgraded 20 → 26.**
-- Repo cloned to `C:\dev\agentcraft` (outside OneDrive). Company Artifactory 403s on public packages,
+- (First PC) Repo cloned to `C:\dev\agentcraft` (outside OneDrive). Company Artifactory 403s on public packages,
   so `foreman/.npmrc` and `tools/.npmrc` point at `registry.npmjs.org` (git-excluded). Deps installed.
 - `~/.claude/settings.json`: `permissions.defaultMode: bypassPermissions` + `skipDangerousModePermissionPrompt`.
 - Mod jar builds clean. Foreman tests: **518/548 pass**; 30 fail = slow e2e git timeouts, not blocking.
@@ -58,9 +58,9 @@ Still AgentCraft: server.mjs's *default* `STATE` (`~/.agentcraft`; the launcher 
 - Launch to view it (demo team):
   ```powershell
   # Foreman (sim) — reuse if ~/.agentcraft/sim/foreman.json pid is alive, else:
-  node C:\dev\agentcraft\foreman\src\main.ts  # via: node --import tsx ... --backend sim --profile sim --home ~/.agentcraft --port 7878
+  node D:\Aviv\Projects\agentcraft\foreman\src\main.ts  # via: node --import tsx ... --backend sim --profile sim --home ~/.agentcraft --port 7878
   # Studio server:
-  node C:\dev\agentcraft-dist\studio\server.mjs --port 7880 --foreman 7878 --foreman-dir C:\dev\agentcraft\foreman
+  node D:\Aviv\Projects\war-room\studio\server.mjs --port 7880 --foreman 7878 --foreman-dir D:\Aviv\Projects\agentcraft\foreman
   # Open the window (token from ~/.agentcraft/studio.json):
   msedge --app="http://127.0.0.1:7880/?t=<token>" --user-data-dir=%LOCALAPPDATA%\AgentCraft\studio-window
   ```
@@ -77,8 +77,9 @@ On the new PC:
    `npm install` in its `foreman/` (if a company registry 403s, add `.npmrc` with
    `registry=https://registry.npmjs.org/`).
 3. Start the Foreman (`cd foreman; node --import tsx src/main.ts --backend sim --profile sim --home ~/.agentcraft --port 7878`),
-   then the studio server and window as in "What works right now". Paths in this file say `C:\dev\...`; adjust.
-4. `studio/test/fakepeer.mjs` has the foreman path hardcoded (`C:/dev/agentcraft/foreman/package.json`).
+   then the studio server and window as in "What works right now". On the second PC (current) everything is under `D:\Aviv\Projects`.
+4. `studio/test/fakepeer.mjs` finds `ws` in the sibling `../agentcraft/foreman` (override with `FOREMAN_DIR`).
+5. Second PC done 2026-11-16: Node 26.13.1 + Inno Setup 6.7.3 via winget; public npm registry works there, no `.npmrc` needed.
 
 ## LAN multiplayer — client is now WIRED (was "in progress")
 
@@ -107,15 +108,31 @@ On the new PC:
   the read-only "Dana's task wall" dialog.
 - Overview and walk of my own office: no regression.
 
-### NOT yet verified — do these next
-- The **Coworkers panel** (click the chip): add host, forget, team code save; wrong team code is refused.
-- Typing **`/chat hi`** in the console: my own bubble, and that the other studio receives it.
-- A coworker with a running goal: agents moving in their office, desk screens, task cards on their board,
-  agent nameplates when inside, "Watch <agent>" dialog. (Give stack #2 a goal first.)
-- Peer leaves → office hidden, free-plot sign back. 2D view → no stale peer plates.
+### Verified on the second PC, 2026-11-16 (two stacks, two real headless windows, `drive.mjs`)
+- Coworkers panel: add host, saved host + forget, team code save. A different team code is refused,
+  the same code reconnects. `/chat` and `/say`: own bubble, the other studio gets bubble + feed + toast.
+- A coworker with a running goal: board cards, agents with nameplates inside their office, "Watch <agent>"
+  dialog, **E** at the board opens their task wall, podium refuses. 2D view: no stale coworker plates.
+- Peer leaves: office hidden, free-plot sign back, chip back to 0.
+
+### Fixed while verifying
+- **Layout:** `body` is a 4-row grid; when `#banner` was hidden, `main` slid into its auto row and the 3D
+  view shrank to the height of the side panel. Rows are pinned in `style.css` now.
+- **Coworkers panel went stale** (said "Nobody else yet" with a coworker connected, kept listing one who
+  left). It now refreshes on join/leave/settings and keeps what is being typed.
+- **Wrong team code was silent.** `server.mjs` now sends one notice per address to the window, on both
+  sides ("... their team code is different from yours" / "... tried to join with a different team code").
+
+### Still open
 - A real **two-machine** test (needs the user): discovery by broadcast, Windows Firewall prompt on :7891.
+- Two studios in ONE browser profile overwrite each other's `ac_token` cookie (cookies ignore the port).
+  Not a real-use case (each studio has its own window profile), but tests need separate contexts.
 
 ### Test tools (`studio/test/`)
+- `drive.mjs <scenario.mjs>` — several headless windows in one browser, each with its own cookies; clicks,
+  keys, mouse, screenshots (`SHOTS_DIR`, default `%TEMP%/warroom-test`). `GPU=1` renders on the real graphics
+  card (120 fps on the second PC); the default software WebGL runs a few fps, so never time game logic in frames.
+  `play.scenario.mjs` is a ready scenario for the play layer.
 - `fakepeer.mjs <studio.json of stack 2> [seconds]` — acts as stack #2's window: sets a look ("Dana"),
   adds `127.0.0.1:7891`, walks in front of stack #1's office, chats every 3 s. Run only ONE at a time.
 - `cdp.mjs <url> <out.png> [waitMs] [js] [key]` — headless Edge over DevTools: load, optionally run JS
@@ -126,6 +143,29 @@ On the new PC:
   `--port 7881 --foreman 7879 --peer-port 7893 --disco-port 7894 --state <temp>/studio.json --peer-file <temp>/studio-peer.json`
   (the separate `--peer-file` matters: otherwise both studios share one peer id and ignore each other).
 - Newly built offices show black walls for a few seconds under software rendering until textures load.
+
+## Play layer: `studio/web/game.js` (added 2026-11-16, user asked for "minecrafty")
+
+A block-world game on the campus, walk mode only. **Original art drawn in code** (16 px canvas textures);
+nothing is copied from Minecraft, and it must stay that way (no Mojang textures, names or look-alikes).
+**Pure local game state**: it only READS `S.agents` / `S.tasks`. It never messages an agent, answers a
+decision, spends tokens or touches a repo. Same hard line as the Arena note below.
+
+- **Blocks:** 1 m cubes outside the offices (never inside buildings, on doorsteps or the road). A seeded
+  wild area (stone outcrops with byte ore, trees, sand) is the same for everyone; what you mine and place
+  is saved in `localStorage` (`wr-world`). Drawn as one `InstancedMesh` per block type.
+- **You:** hotbar 1-9, backpack **I** (click two slots to move; crafting list), hearts, XP/levels, **Space**
+  jumps onto blocks, left-click (or **F**) hits, right-click places the held block or drinks coffee.
+  Saved in `wr-player`. Dying sends you to your office door, nothing is lost.
+- **Bugs:** Glitch, Heisenbug (teleports when hit), Memory leak (grows). A few at night; **two more for
+  every agent whose status says failing/error/blocked**. They cannot enter offices or climb blocks, so
+  walls work. Finished tasks pay 2 bytes.
+- **Day/night** runs on the wall clock (10 min), so coworkers share it. Lamp blocks light up at night.
+- Hooks in `view3d.js`: `Game.update/hit/use/blocksMove/show/swing`, `me.y`, `hemi`. Test API:
+  `window.WRGame` (`state()`, `give`, `spawn`, `time(0..1)`, `peace()`, `setBlock`, `aimAt`, `hurt`).
+- **Not done:** coworkers do not see each other's blocks, bugs or held items yet (needs new peer
+  messages; keep them bounded and cosmetic). Blocks do not stop the walk camera. No sound volume setting
+  beyond on/off in the backpack. Balance is a first guess.
 
 ## After multiplayer
 
