@@ -914,6 +914,7 @@ function onNet(m) {
     }
     case 'peer.g': { const p = peersV.get(m.id); if (p && m.d && typeof m.d === 'object' && typeof m.k === 'string') { Town?.onGame(p, m.k, m.d); Arena?.onGame(p, m.k, m.d); } break; }
     case 'peer.gone': dropPeer(m.id); break;
+    case 'brain.status': case 'brain.result': Arena?.onBrain(m); break;
     case 'notice': AC.toast(m.text, 'warn'); break;
   }
 }
@@ -1219,7 +1220,7 @@ function updatePeers(now, dt) {
 
 Game = initGame({
   THREE, scene, camera, el, floorEl, overlayEl, me, mat, AC, S, sun, hemi, blocked, busy, toScreen,
-  lots: () => [MYLOT, ...LOTS], getMode: () => mode, isVisible: () => !!window.View3D?.visible,
+  lots: () => [MYLOT, ...LOTS], extraHit: (dmg) => !!Arena?.playerHit(dmg), getMode: () => mode, isVisible: () => !!window.View3D?.visible,
 });
 const W = {
   THREE, scene, camera, el, floorEl, overlayEl, me, cam, mat, M, AC, S, box, plane, colliders, blocked, busy, toScreen, toWire, fromWire, netSend,

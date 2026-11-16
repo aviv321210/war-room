@@ -366,6 +366,81 @@ function splitHost(h) {
   return m ? [m[1], Number(m[2] ?? PEER_PORT)] : [h, PEER_PORT];
 }
 
+// =============================================================================================
+// Arena brains: the thinking of the game's operatives (see web/arena.js)
+//
+// An operative is a game piece, NOT one of the Foreman's coding agents: it has no shell, no files and no
+// repository. The only things it can do are the game moves below, and those are defined here, on the server,
+// so nothing a window or a coworker sends can add a tool. Models: Haiku and Sonnet only. Every call is paid
+// by this studio's own key and counted against a budget that only this studio's window can set (never a peer),
+// with a hard ceiling (--arena-max, dollars). The key comes from ANTHROPIC_API_KEY or is typed in the window;
+// it stays in memory, is never written to disk or to the log, and never leaves for a coworker.
+// =============================================================================================
+const ARENA_MAX = Math.max(0.05, Number(args['arena-max'] ?? 5));
+const MODELS = {            // dollars per million tokens (list prices, November 2026)
+  haiku: { id: 'claude-haiku-5-5', in: 0.10, out: 0.50, cw: 0.125, cr: 0.01 },
+  sonnet: { id: 'claude-sonnet-5-5', in: 2, out: 10, cw: 2.5, cr: 0.10 },
+};
+const move = (name, description, props) => ({
+  name, description, strict: true,
+  input_schema: { type: 'object', properties: { ...props, note: { type: 'string', description: 'One short line to remember for your next turn. May be empty.' } }, required: [...Object.keys(props), 'note'], additionalProperties: false },
+});
+const who = (d) => ({ who: { type: 'string', description: d } });
+const ARENA_TOOLS = [
+  move('go', 'Walk to a place.', { place: { type: 'string', description: 'A name from PLACES, exactly as written.' } }),
+  move('approach', 'Walk up to someone and stay next to them.', who('Name of a person from NEARBY, TEAM or ENEMIES.')),
+  move('say', 'Say something out loud. Everyone within 12 metres hears it, friend or enemy.', { text: { type: 'string', description: 'What you say, at most 200 characters.' } }),
+  move('attack', 'Fight an enemy operative or commander until they are down, or you are.', who('Name of an enemy.')),
+  move('arrest', 'Carry a knocked-out enemy operative to your own holding cells and lock them in.', who('Name of a knocked-out enemy operative.')),
+  move('free', 'Go to the cell that holds a teammate and unlock it from outside.', who('Name of a jailed teammate.')),
+  move('guard', 'Stand at a place and attack enemies who come close.', { place: { type: 'string', description: 'A name from PLACES, exactly as written.' } }),
+  move('join_team', 'Leave your team for good and work for another commander.', { team: { type: 'string', description: 'Name of the commander you now work for.' }, reason: { type: 'string', description: 'Why, in one line.' } }),
+  move('wait', 'Do nothing this turn.', {}),
+];
+const brain = { key: process.env.ANTHROPIC_API_KEY ?? '', source: process.env.ANTHROPIC_API_KEY ? 'env' : '', sdk: null, client: null, spent: 0, budget: Math.min(1, ARENA_MAX), calls: 0, busy: 0, plain: false };
+function brainStatus() {
+  return { type: 'brain.status', ready: !!brain.key, source: brain.source, spent: +brain.spent.toFixed(5), budget: brain.budget, max: ARENA_MAX, calls: brain.calls };
+}
+async function brainThink(ws, m) {
+  const reply = (r) => sendTo(ws, { type: 'brain.result', rid: str(m.rid, 24), ...r, spent: +brain.spent.toFixed(5), budget: brain.budget });
+  const M = MODELS[m.model];
+  if (!M) return reply({ ok: false, why: 'model' });
+  if (!brain.key) return reply({ ok: false, why: 'nokey' });
+  if (brain.spent >= brain.budget) return reply({ ok: false, why: 'budget' });
+  if (brain.busy >= 4) return reply({ ok: false, why: 'busy' });
+  brain.busy++;
+  try {
+    if (!brain.sdk) { const mod = require('@anthropic-ai/sdk'); brain.sdk = mod.default ?? mod.Anthropic ?? mod; }
+    brain.client ??= new brain.sdk({ apiKey: brain.key, timeout: 40_000, maxRetries: 1 });
+    // the game rules and the team's rulebook are the same for the whole squad and the whole match: cached prefix
+    const body = {
+      model: M.id, max_tokens: 1024, output_config: { effort: 'low' },
+      system: [{ type: 'text', text: str(m.game, 6000) }, { type: 'text', text: str(m.rules, 6000) || '(This team has no rules.)', cache_control: { type: 'ephemeral' } }],
+      tools: ARENA_TOOLS,
+      messages: [{ role: 'user', content: str(m.user, 8000) || 'Your turn.' }],
+    };
+    let r;
+    if (m.model === 'sonnet' && !brain.plain) {
+      // Sonnet 5.5 can decline a turn for safety reasons; let the API hand such a turn to its fallback (also a Sonnet)
+      try { r = await brain.client.beta.messages.create({ ...body, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' }); }
+      catch (e) { if (!(e instanceof brain.sdk.BadRequestError)) throw e; brain.plain = true; r = await brain.client.messages.create(body); }
+    } else r = await brain.client.messages.create(body);
+    const u = r.usage ?? {};
+    const usage = { in: u.input_tokens ?? 0, out: u.output_tokens ?? 0, cw: u.cache_creation_input_tokens ?? 0, cr: u.cache_read_input_tokens ?? 0 };
+    const cost = (usage.in * M.in + usage.out * M.out + usage.cw * M.cw + usage.cr * M.cr) / 1e6;
+    brain.spent += cost; brain.calls++;
+    const call = r.content.find((b) => b.type === 'tool_use');
+    const said = r.content.filter((b) => b.type === 'text').map((b) => b.text).join(' ').slice(0, 300);
+    reply({ ok: true, tool: call ? { name: call.name, input: call.input } : null, text: said, stop: r.stop_reason, usage, cost });
+  } catch (e) {
+    const A = brain.sdk;
+    const why = !A ? 'sdk' : e instanceof A.AuthenticationError ? 'auth' : e instanceof A.RateLimitError ? 'rate' : e instanceof A.APIError ? 'api' : 'error';
+    if (why === 'auth') brain.client = null;
+    log(`arena brain: ${why}${e?.status ? ' ' + e.status : ''}`);
+    reply({ ok: false, why });
+  } finally { brain.busy--; }
+}
+
 // --- the studio window(s) on this machine ----------------------------------------------------
 const apps = new Set();
 function toApps(m) { const s = JSON.stringify(m); for (const a of apps) if (a.readyState === WebSocket.OPEN) a.send(s); }
@@ -375,6 +450,7 @@ function selfView() {
 function worldApp(ws) {
   apps.add(ws);
   sendTo(ws, selfView());
+  sendTo(ws, brainStatus());
   if (office) sendTo(ws, { type: 'self.office', office });
   for (const p of peers.values()) sendTo(ws, { type: 'peer.join', peer: peerView(p) });
   ws.on('message', (data) => {
@@ -416,6 +492,21 @@ function worldApp(ws) {
         toApps(selfView());
         break;
       case 'self': sendTo(ws, selfView()); break;
+      case 'brain.think': brainThink(ws, m); break;
+      case 'brain.key': {
+        const k = str(m.key, 300).trim();
+        if (k && !/^sk-ant-[\w-]{20,280}$/.test(k)) { sendTo(ws, { type: 'notice', text: 'That does not look like an Anthropic API key (sk-ant-...).' }); break; }
+        if (k) { brain.key = k; brain.source = 'window'; } else { brain.key = process.env.ANTHROPIC_API_KEY ?? ''; brain.source = brain.key ? 'env' : ''; }
+        brain.client = null;
+        toApps(brainStatus());
+        break;
+      }
+      case 'brain.budget':                   // a new match: a new budget, counted from zero
+        brain.budget = Math.max(0.05, Math.min(ARENA_MAX, num(m.usd, 0, 1000) || 1));
+        brain.spent = 0; brain.calls = 0;
+        toApps(brainStatus());
+        break;
+      case 'brain.status': sendTo(ws, brainStatus()); break;
     }
   });
   ws.on('close', () => { apps.delete(ws); if (!apps.size) { self.pos = null; toPeers({ t: 'pos', anchor: '', dx: 0, dz: 0, rot: 0, moving: false }); toPeers({ t: 'g', k: 'away', d: {} }); } });

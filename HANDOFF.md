@@ -86,7 +86,8 @@ On the new PC:
 **P2P on the LAN, no central server.** Design locked with the user:
 - UDP broadcast discovery on :7892, peer WS on :7891, fallback = add a coworker by PC name / IP.
   Optional **team code** (only same-code studios connect).
-- **Shared over the wire:** name + avatar look, avatar position, chat, and an **activity summary**
+- **Shared over the wire:** name + avatar look, avatar position, chat, game traffic (see "Campus" and
+  "Arena" below: notes, carts, cell locks, operatives), and an **activity summary**
   (agents' status line, task titles+status, goal text/progress, decision **count**). **NEVER** logs,
   diffs, code, decision contents, or repo paths. Peers can't reach the Foreman. Visitors are
   **watch-only**. (Note: `cleanOffice` in server.mjs also sends the repo *name*; the client never
@@ -132,7 +133,8 @@ On the new PC:
 - `drive.mjs <scenario.mjs>` — several headless windows in one browser, each with its own cookies; clicks,
   keys, mouse, screenshots (`SHOTS_DIR`, default `%TEMP%/warroom-test`). `GPU=1` renders on the real graphics
   card (120 fps on the second PC); the default software WebGL runs a few fps, so never time game logic in frames.
-  `play.scenario.mjs` is a ready scenario for the play layer.
+  `play.scenario.mjs` (play layer), `town.scenario.mjs` (campus, two players), `arena.scenario.mjs` (a whole match).
+  Keys go to the page in front: after typing in the console, blur it before sending game keys.
 - `fakepeer.mjs <studio.json of stack 2> [seconds]` — acts as stack #2's window: sets a look ("Dana"),
   adds `127.0.0.1:7891`, walks in front of stack #1's office, chats every 3 s. Run only ONE at a time.
 - `cdp.mjs <url> <out.png> [waitMs] [js] [key]` — headless Edge over DevTools: load, optionally run JS
@@ -149,7 +151,7 @@ On the new PC:
 A block-world game on the campus, walk mode only. **Original art drawn in code** (16 px canvas textures);
 nothing is copied from Minecraft, and it must stay that way (no Mojang textures, names or look-alikes).
 **Pure local game state**: it only READS `S.agents` / `S.tasks`. It never messages an agent, answers a
-decision, spends tokens or touches a repo. Same hard line as the Arena note below.
+decision, spends tokens or touches a repo.
 
 - **Blocks:** 1 m cubes outside the offices (never inside buildings, on doorsteps or the road). A seeded
   wild area (stone outcrops with byte ore, trees, sand) is the same for everyone; what you mine and place
@@ -167,16 +169,83 @@ decision, spends tokens or touches a repo. Same hard line as the Arena note belo
   messages; keep them bounded and cosmetic). Blocks do not stop the walk camera. No sound volume setting
   beyond on/off in the backpack. Balance is a first guess.
 
+## Campus: lots, board, cart, cells, nearby talk (`studio/web/town.js`, `view3d.js`; added 2026-11-16)
+
+- **Offices on both sides of the road.** A lot is a column (48 m apart) and a side; a south lot is the same
+  plan turned around the middle of the road (z = 26). Everything on a lot is built in office-local
+  coordinates through `L.w()` / `L.l()` (`makeLot`, `lotGroup` in `view3d.js`). Your own office is always
+  the lot at the origin.
+- **One campus for everybody.** Players sorted by id take lots in pairs across the road (`assignLots`), and
+  each window shows that campus moved (or turned) so its own office is at the origin. So distances and
+  neighbours agree in every window. Places go over the wire in the frame of the nearest office
+  (`toWire` / `fromWire`). Up to 8 players are sure to see each other (columns -3..3). A join or leave can
+  re-deal the lots; inside a running arena match that would move things, so start matches after everyone is in.
+- **Peer protocol is v2** (`PROTO` in `server.mjs`): older builds are refused with a notice on both sides.
+- **Game relay:** windows talk through `{type:'g', k, d, to?}` -> peers `{t:'g'}` -> `peer.g`. The server
+  only checks kind and size (6 kB) and the per-peer rate limit; it gives the data no meaning. Windows treat
+  everything that arrives as untrusted (numbers checked, text cut and escaped). Kinds: `st` (cells, parked
+  cart, board notes), `jreq`, `say`, `away`, and the arena's `ar.*`.
+- **Announcement board** in front of every office (E, or `/announce`): five notes per player, everyone's
+  notes on every board, kept in `localStorage` (`wr-board`).
+- **Cart** per player (E in/out, W/S, A/D, Shift; `/cart` brings it): about 13 m/s, 19 with Shift.
+- **Holding cells** beside every office: three cells, doors lock from the yard side only (E), also on a
+  coworker's cells (a `jreq` the owner applies). From inside you can force the lock after 45 s.
+- **`/say`** carries 16 m (everyone gets the message with its position and shows it only when near, so it
+  is a game rule, not privacy). `/chat` still reaches the whole campus.
+- Test: `studio/test/town.scenario.mjs` (two players). Test handles: `WRView`, `WRTown`.
+- **Not done:** voice; other people's carts are not obstacles; block worlds are still per player.
+
+## Arena (`studio/web/arena.js` + "Arena brains" in `server.mjs`; added 2026-11-16)
+
+The user's goal: a competitive game that teaches developers rules/instructions, prompt hygiene and
+multi-agent management. Each player has a token budget and uses Sonnet or smaller.
+
+- **Game:** each player fields three operatives (job: guard / raider / talker; brain: demo, Haiku 5.5 or
+  Sonnet 5.5) and writes the **team rules** they are told every turn. Last commander with an operative
+  standing wins. Operatives are knocked out at 0 health (40 s), can be carried to the winner's cells and
+  locked in, finished off while down, freed by a teammate, or **talked into changing sides**.
+- **The lesson is built into the turn:** orders come on a private radio (`/order <name|all> text`), speech
+  (`/say`, or an operative's `say` move) is listed separately as HEARD and can come from anyone. The default
+  rules are naive on purpose. The review in the Arena panel shows, for every defection, what the operative
+  had just heard and the reason it gave, plus turns, tokens, cache hits and cost per operative.
+- **Budget levers the player feels:** model per operative (Sonnet is 20x Haiku), length of the rules,
+  "think at least every N s". At the budget an operative freezes ("out of tokens").
+- **Where things run:** all game logic is in the window (`arena.js`); each window is the authority for the
+  operatives it runs and tells the others (`ar.st` 4-5 times a second, `ar.hit`, `ar.grab`, `ar.drop`,
+  `ar.take`, `ar.say`, `ar.start`, `ar.ev`). It is a friendly LAN game: a modified client could cheat.
+- **Brains:** `brain.think` on the `/world` socket -> `brainThink` in `server.mjs` -> the Anthropic SDK that
+  ships in the Foreman's `node_modules` (`@anthropic-ai/sdk`, no new dependency). One call per turn, no
+  history (the operative's own one-line note carries memory). The rules + game text are a cached prefix.
+  The **demo brain** (`demoBrain` in `arena.js`) is free and rule-based: it obeys keyword orders and falls
+  for "join ..." unless the team rules contain phrases like "never join" / "only obey".
+
+### Hard lines (replaces the old "simulated only" note; keep them)
+- An operative is a **game piece, not a Foreman agent**. The Foreman's coding agents cannot be ordered,
+  stolen, hit or read by the game or by a coworker. Nothing here reaches the Foreman, a shell or a repo.
+- The only moves an operative has are the nine tools defined **in `server.mjs`** (`ARENA_TOOLS`); a window
+  or a peer cannot add one. Models are limited to Haiku and Sonnet there too.
+- **Nobody spends someone else's tokens.** Each studio thinks only for the operatives it runs, on its own key.
+  An operative that changes sides is handed over (`ar.take`) and from then on runs on the new commander's
+  rules and budget. The budget is set only by the studio's own window and capped by `--arena-max` (default $5).
+- The API key comes from `ANTHROPIC_API_KEY` or is typed in the Arena panel; it stays in the server's
+  memory, is not saved, not logged, never sent to a peer.
+- We still refuse the original idea (talk a rival's *real* coding agents into working for you on their bill).
+
+### Verified / not verified
+- Verified with `studio/test/arena.scenario.mjs` (two players, demo brains): start, fights, knock-out,
+  arrest and lock, rescue, defection by speech (naive rules lose, hardened rules hold), hand-over, winner, review.
+- **NOT verified: the Claude brains.** No API key on the second PC, so `brainThink` has never made a real
+  call. Check first: the request shape (`output_config.effort: 'low'`, strict tools, cached system blocks,
+  the Sonnet `fallbacks: 'default'` beta, which falls back to a plain call on a 400), the prices in `MODELS`,
+  and how Haiku/Sonnet actually play (they may need a firmer "one tool call only" line in `GAME`).
+- **Not done:** the launcher does not pass the API key to the studio server yet (the setup dialog stores it
+  for the Foreman; pass it as `ANTHROPIC_API_KEY` in the server's environment). Commanders can be hit but
+  cannot be arrested. No spectators list, no match timer, no best-of. Operatives ignore placed blocks and
+  walk only outdoors. Balance of the demo brain is a first guess (a match lasts about a minute).
+
 ## After multiplayer
 
-- **Simulated Arena / warfare mode — LATER (user said "simulated mode will be later").**
-  Game units (may borrow agent looks) that fight / defect / capture territory, as **pure game state
-  on the world server**. HARD CONSTRAINT, agreed with the user and non-negotiable: it must **never**
-  control a real agent, spend anyone's tokens, or touch any repo. We **refused** the original ask
-  ("convince a rival's agents to betray their owner and work for me, billed to the enemy's seat,
-  attack each other") because AgentCraft agents are real coding agents with shell+repo access and a
-  real bill — that's account abuse + remote takeover, and it's exactly the security gate the project
-  exists to protect. The simulated version is fine; keep that line.
+- **Arena:** built 2026-11-16, see "Arena" above. Its hard lines replace the old "simulated only" note.
 - **Installer — REWRITTEN for the studio app (2026-11-16, done on the slow PC while multiplayer/look
   work went on elsewhere; it touches only `src/`, `build.ps1`).** `build.ps1` -> `out/WarRoom-Setup.exe`.
   Bundles Node (`downloads/node.zip`) + **MinGit** (`downloads/mingit.zip`: the Foreman needs git for

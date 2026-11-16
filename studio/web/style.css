@@ -286,3 +286,21 @@ kbd { background: var(--paper); color: var(--ink); border-radius: 4px; padding: 
 .notes li .muted { color: #7a6a5c; font-size: 12px; }
 .notes li a { font-size: 12px; margin-left: 6px; }
 .notes li div { margin-top: 3px; overflow-wrap: anywhere; }
+
+/* arena */
+.plate.op { pointer-events: none; padding: 2px 7px 3px; }
+.plate.op .hpbar { height: 3px; background: rgba(0,0,0,.45); border-radius: 2px; margin: 2px 0 1px; overflow: hidden; }
+.plate.op .hpbar i { display: block; height: 100%; background: #6fbf5a; }
+.arena-chip { position: absolute; right: 10px; top: 10px; z-index: 5; background: rgba(26,20,16,.82); color: var(--text); border: 1px solid var(--brass); border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer; display: flex; gap: 5px; align-items: center; }
+.arena-chip .dot, .plate.op .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+.arena textarea { width: 100%; box-sizing: border-box; font: 13px/1.4 Consolas, monospace; background: #1a1410; color: var(--text); border: 1px solid #5a4a3c; border-radius: 6px; padding: 8px; resize: vertical; }
+.arena .squad { width: 100%; border-collapse: collapse; }
+.arena .squad th { text-align: left; font-size: 11px; color: var(--text-soft); font-weight: 600; padding: 0 6px 3px 0; }
+.arena .squad td { padding: 2px 6px 2px 0; font-size: 12px; }
+.arena .squad input, .arena .squad select { width: 100%; box-sizing: border-box; }
+.arena .row label { display: flex; gap: 6px; align-items: center; font-size: 12px; }
+.arena .row input[type=number] { width: 70px; }
+.arena details { margin: 8px 0; }
+.arena details li, .arena .trace li, .arena .events li { font-size: 12px; margin: 2px 0; }
+.arena .trace ul, .arena .events { margin: 2px 0 8px; padding-left: 18px; }
+.arena .lesson { background: #f6ded7; color: #3d2a1e; border-radius: 6px; padding: 8px 10px; font-size: 13px; }

@@ -554,6 +554,7 @@ export function initGame(C) {
     if (!active() || performance.now() < coolUntil) return false;
     const a = useAim ? aim() : { bug: null, block: null };
     const tool = ITEMS[held()?.id];
+    if (C.extraHit?.(tool?.dmg ?? 1)) { doSwing(); return true; }      // an enemy operative of the arena is in reach
     const b = a.bug ?? (a.block ? null : inFront());
     if (b) { faceTo(b.x, b.z); doSwing(); hurtBug(b, tool?.dmg ?? 1); return true; }
     if (a.block) {
@@ -669,5 +670,5 @@ export function initGame(C) {
     state: () => ({ hp, xp, level: level(), sel, held: held()?.id ?? null, y: +me.y.toFixed(2), bugs: bugs.map((b) => `${b.type}:${b.hp}`), light: +light.toFixed(2), blocks: cells.size, placed: placed.size, failing: failing.map((a) => a.name) }),
   };
   renderHud();
-  return { update, hit, use, blocksMove, show, swing: doSwing };
+  return { update, hit, use, blocksMove, show, swing: doSwing, hurt: (dmg) => hurtMe(dmg, me.x, me.z + 1) };
 }
