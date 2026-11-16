@@ -3,8 +3,8 @@
 // tests bring out more bugs, finished tasks pay a few bytes) and can never message an agent,
 // answer a decision, spend tokens or touch a repository. All art is drawn here, pixel by pixel.
 export function initGame(C) {
-  const { THREE, scene, camera, el, floorEl, overlayEl, me, mat, AC, S, sun, hemi, PLOTS } = C;
-  const OFFICES = [0, ...PLOTS];
+  const { THREE, scene, camera, el, floorEl, overlayEl, me, mat, AC, S, sun, hemi } = C;
+  const LOTS = C.lots();                           // every place an office can stand, on both sides of the road
   const rng = (seed) => () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const load = (k, d) => { try { const s = localStorage.getItem(k); return s ? JSON.parse(s) : d; } catch { return d; } };
@@ -110,18 +110,19 @@ export function initGame(C) {
     L.mesh.boundingSphere = null; L.mesh.boundingBox = null;      // recomputed by the next raycast
   }
   const rebuildDirty = () => { for (const t in layers) if (layers[t].dirty) rebuild(t); };
-  const saved = load('wr-world', { placed: {}, mined: [] });
+  const saved = load('wr-world2', { placed: {}, mined: [] });
   const mined = new Set(saved.mined);
   const placed = new Map(Object.entries(saved.placed ?? {}));
   let saveTimer = null;
-  const saveSoon = () => { saveTimer ??= setTimeout(() => { saveTimer = null; store('wr-world', { placed: Object.fromEntries(placed), mined: [...mined] }); store('wr-player', { inv, sel, xp, hp: Math.ceil(hp), sound }); }, 800); };
+  const saveSoon = () => { saveTimer ??= setTimeout(() => { saveTimer = null; store('wr-world2', { placed: Object.fromEntries(placed), mined: [...mined] }); store('wr-player', { inv, sel, xp, hp: Math.ceil(hp), sound }); }, 800); };
 
-  const inOffice = (x, z) => z > -0.4 && z < 20.5 && OFFICES.some((ox) => x > ox - 0.4 && x < ox + 32.4);
+  // inside a building that is standing (yours, or a coworker's)
+  const inOffice = (x, z) => LOTS.some((L) => { if (L.col || L.south) { if (!L.owner) return false; } const [lx, lz] = L.l(x, z); return lx > -0.4 && lx < 32.4 && lz > -0.4 && lz < 20.5; });
   function canBuild(x, z) {       // cell (x, z): keep the buildings, their doorsteps and the road free
     const cx = x + 0.5, cz = z + 0.5;
     if (cx < -158 || cx > 188 || cz < -78 || cz > 108) return false;
     if (cz > 23.5 && cz < 28.5) return false;
-    return !(cz > -1.5 && cz < 23.5 && OFFICES.some((ox) => cx > ox - 1.5 && cx < ox + 33.5));
+    return !LOTS.some((L) => { const [lx, lz] = L.l(cx, cz); return lx > -1.5 && lx < 46.5 && lz > -1.5 && lz < 23.5; });   // office, doorstep, holding cells
   }
   function setBlock(x, y, z, t, nat) {
     const b = BLOCKS[t];
@@ -143,7 +144,7 @@ export function initGame(C) {
     const nat = (x, y, z, t) => { if (canBuild(x, z) && !mined.has(key(x, y, z)) && !(y === 0 && C.blocked(x + 0.5, z + 0.5))) setBlock(x, y, z, t, true); };
     for (let n = 0; n < 150; n++) {
       const front = n < 9 || r() < 0.55;
-      const x = Math.round(n < 9 ? -10 + r() * 54 : -150 + r() * 330), z = Math.round(front ? 34 + r() * (n < 9 ? 14 : 44) : -5 - r() * 40);
+      const x = Math.round(n < 9 ? -10 + r() * 54 : -150 + r() * 330), z = Math.round(n < 9 ? -3 - r() * 11 : front ? 56 + r() * 40 : -5 - r() * 40);   // the first few right behind your office
       const kind = r();
       if (kind < 0.42) {                                             // a stone outcrop with some ore
         let cx = x, cz = z;
@@ -166,7 +167,7 @@ export function initGame(C) {
         for (let i = 0, m = 4 + ((r() * 5) | 0); i < m; i++) { nat(cx, 0, cz, 'sand'); if (r() < 0.5) cx += r() < 0.5 ? 1 : -1; else cz += r() < 0.5 ? 1 : -1; }
       }
     }
-    for (const [k, t] of placed) { const [x, y, z] = k.split(',').map(Number); setBlock(x, y, z, t, false); }
+    for (const [k, t] of placed) { const [x, y, z] = k.split(',').map(Number); if (canBuild(x, z)) setBlock(x, y, z, t, false); }
     rebuildDirty();
   })();
 

@@ -2,6 +2,9 @@
 // tile (x, y) = world (x, 0, y)), drawn with three.js from AgentCraft's own textures and skins.
 import * as THREE from './vendor/three.module.min.js';
 import { initGame } from './game.js';
+import { initTown } from './town.js';
+import { initArena } from './arena.js';
+let Town = null, Arena = null;   // shared campus things (board, cart, cells, nearby talk) and the agent arena
 let Game = null;                 // the play layer (blocks, backpack, bugs): see game.js
 
 const AC = window.AC;
@@ -108,14 +111,14 @@ function booksTexture() {
 const clickables = [];
 const colliders = [];   // {x0, x1, z0, z1, g}: the avatar cannot walk through these (while g is shown)
 const occluders = [];   // walls and roof: the walk camera stays on the avatar's side of them
-let BUILD = { parent: null, ox: 0 };   // where box() puts things while an office is being built
+let BUILD = { parent: null, lot: null };   // where box() puts things while an office is being built
 function shown(o) { for (; o; o = o.parent) if (!o.visible) return false; return true; }
 function box(w, h, d, material, x, y, z, opts = {}) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
   m.position.set(x, y, z);
   m.castShadow = opts.cast ?? true; m.receiveShadow = true;
   if (opts.click) { m.userData.click = opts.click; clickables.push(m); }
-  if (opts.solid) colliders.push({ x0: BUILD.ox + x - w / 2, x1: BUILD.ox + x + w / 2, z0: z - d / 2, z1: z + d / 2, g: m });
+  if (opts.solid) { const [cx, cz] = BUILD.lot ? BUILD.lot.w(x, z) : [x, z]; colliders.push({ x0: cx - w / 2, x1: cx + w / 2, z0: cz - d / 2, z1: cz + d / 2, g: m }); }
   if (opts.occlude) occluders.push(m);
   (opts.parent ?? BUILD.parent ?? scene).add(m);
   return m;
@@ -135,6 +138,28 @@ function plane(w, d, material, x, y, z, parent) {
 // ---------------------------------------------------------------------------------------------
 // an office building: the same plan for you and for every coworker (origin at x = ox)
 // ---------------------------------------------------------------------------------------------
+// Lots: where an office can stand. Yours is the one at the origin, north of the road with its door to the south.
+// The others sit in columns 48 m apart on both sides of the road; a south lot is the same plan turned around
+// (about the middle of the road), so its door faces north. Everything on a lot is built in the office's own
+// coordinates: w() turns those into world coordinates, l() goes back.
+function makeLot(col, south) {
+  const ox = col * 48;
+  const L = { col, south, ox, key: col + (south ? 's' : 'n'), rot: south ? Math.PI : 0, owner: null, office: null };
+  L.w = south ? (lx, lz) => [ox + 32 - lx, 52 - lz] : (lx, lz) => [ox + lx, lz];
+  L.l = south ? (x, z) => [ox + 32 - x, 52 - z] : (x, z) => [x - ox, z];
+  L.inside = (x, z) => { const [lx, lz] = L.l(x, z); return lx > 0 && lx < 32 && lz > 0 && lz < 20.2; };
+  return L;
+}
+function lotGroup(L) {
+  const g = new THREE.Group();
+  g.position.set(L.south ? L.ox + 32 : L.ox, 0, L.south ? 52 : 0); g.rotation.y = L.rot;
+  scene.add(g);
+  return g;
+}
+const MYLOT = makeLot(0, false);
+const LOTS = [];
+for (const c of [0, 1, -1, 2, -2, 3, -3]) for (const s of [false, true]) if (c || s) LOTS.push(makeLot(c, s));
+
 const plaster = (rx, ry) => mat({ map: tex('plaster_panel', rx, ry) });
 const roofMat = mat({ color: '#5a3e2b' });
 const floorMat = mat({ map: tex('oak_parquet', 32, 20) });
@@ -144,10 +169,10 @@ const CARD = { todo: mat({ color: '#f4efe6' }), doing: mat({ color: '#9fd9d6' })
 const FM = {};
 for (const k of ['task_board_surface', 'memory_archive_front', 'console_screen', 'merge_station_front', 'decision_podium_front']) FM[k] = faceMat(k);
 
-function buildOffice(ox, mine) {
-  const G = new THREE.Group(); G.position.x = ox; scene.add(G);
-  const prev = BUILD; BUILD = { parent: G, ox };
-  const O = { G, ox, mine, deskScreens: [], plaques: [], cardKey: '', onBoard: null, onLibrary: null, onPodium: null, onMerge: null };
+function buildOffice(L, mine) {
+  const G = lotGroup(L);
+  const prev = BUILD; BUILD = { parent: G, lot: L };
+  const O = { G, lot: L, mine, deskScreens: [], plaques: [], cardKey: '', onBoard: null, onLibrary: null, onPodium: null, onMerge: null };
   const call = (k) => () => O[k]?.();
 
   plane(32, 20, floorMat, 16, 0, 10);
@@ -327,13 +352,7 @@ function tree(x, z, s = 1) {
   box(1.7 * s, 1.0 * s, 1.7 * s, crown2, x + 0.2, 4.0 * s, z - 0.1);
 }
 function bench(x, z) { box(2, 0.12, 0.6, M.walnut, x, 0.5, z, solid); box(2, 0.5, 0.12, M.walnut, x, 0.8, z + 0.3); for (const dx of [-0.8, 0.8]) box(0.12, 0.5, 0.5, M.dark, x + dx, 0.25, z); }
-const PLOTS = [48, -48, 96, -96, 144, -144];       // coworkers' plots (origin x); yours is at 0
-for (const base of [0, ...PLOTS]) {
-  for (const [x, z, s] of [[-4, 4, 1.1], [-6, 15, 0.9], [4, 31, 1], [12, 32, 1.2], [24, 31, 1], [36, 9, 1.05]]) tree(base + x, z, s);
-  bench(base + 10, 23); bench(base + 22, 23);
-  for (const lx of [8, 24]) { box(0.15, 3, 0.15, M.dark, base + lx, 1.5, 24.2, solid); box(0.45, 0.35, 0.45, M.lampOn, base + lx, 3.1, 24.2, { cast: false }); }
-}
-// free plots: shown until a coworker's office takes one
+// free plots: a sign and a fence until a coworker's office takes the lot
 const plotSignCanvas = document.createElement('canvas'); plotSignCanvas.width = 256; plotSignCanvas.height = 64;
 {
   const x = plotSignCanvas.getContext('2d');
@@ -341,16 +360,25 @@ const plotSignCanvas = document.createElement('canvas'); plotSignCanvas.width = 
   x.textAlign = 'center'; x.fillText('Free plot', 128, 28); x.font = '16px Segoe UI, sans-serif'; x.fillText("a coworker's office goes here", 128, 50);
 }
 const plotSignTex = new THREE.CanvasTexture(plotSignCanvas); plotSignTex.colorSpace = THREE.SRGBColorSpace;
-const freeLots = PLOTS.map((px) => {
-  const g = new THREE.Group(); scene.add(g);
-  const prev = BUILD; BUILD = { parent: g, ox: 0 };
-  plane(32, 20, mat({ color: '#8a7a5c' }), px + 16, -0.01, 10);
-  for (const [fx, fz, fw, fd] of [[px + 16, 0, 32, 0.15], [px, 10, 0.15, 20], [px + 32, 10, 0.15, 20]]) box(fw, 0.6, fd, M.walnut, fx, 0.3, fz, solid);
-  box(0.15, 1.6, 0.15, M.walnutDark, px + 16, 0.8, 21.5, solid);
-  box(2.6, 0.7, 0.08, [M.walnut, M.walnut, M.walnut, M.walnut, mat({ map: plotSignTex }), M.walnut], px + 16, 1.7, 21.5);
+// around every lot: trees, benches and street lamps (the far lots only show once someone lives there)
+const freeMat = mat({ color: '#8a7a5c' }), plotSignMat = mat({ map: plotSignTex });
+for (const L of [MYLOT, ...LOTS]) {
+  L.deco = lotGroup(L);
+  const prev = BUILD; BUILD = { parent: L.deco, lot: L };
+  tree(-3.4, 4, 1.1); tree(-3.8, 15, 0.9);
+  bench(10, 23); bench(22, 23);
+  for (const lx of [8, 24]) { box(0.15, 3, 0.15, M.dark, lx, 1.5, 24.2, solid); box(0.45, 0.35, 0.45, M.lampOn, lx, 3.1, 24.2, { cast: false }); }
+  if (L !== MYLOT) {
+    L.free = new THREE.Group(); L.deco.add(L.free);
+    BUILD = { parent: L.free, lot: L };
+    plane(32, 20, freeMat, 16, -0.01, 10);
+    for (const [fx, fz, fw, fd] of [[16, 0, 32, 0.15], [0, 10, 0.15, 20], [32, 10, 0.15, 20]]) box(fw, 0.6, fd, M.walnut, fx, 0.3, fz, solid);
+    box(0.15, 1.6, 0.15, M.walnutDark, 16, 0.8, 21.5, solid);
+    box(2.6, 0.7, 0.08, [M.walnut, M.walnut, M.walnut, M.walnut, plotSignMat, M.walnut], 16, 1.7, 21.5);
+    L.deco.visible = Math.abs(L.col) <= 1;
+  }
   BUILD = prev;
-  return g;
-});
+}
 
 // lights: soft ambient + a sun that follows you (its shadows cover the area around you)
 const hemi = new THREE.HemisphereLight('#fff3df', '#3a2a20', 1.6);
@@ -364,7 +392,7 @@ sun.shadow.bias = -0.0008;
 scene.add(sun, sun.target);
 
 // your own office
-const MY = buildOffice(0, true);
+const MY = buildOffice(MYLOT, true);
 const { deskScreens, roof, frontWall, cardGroup, bellMat, podiumLight } = MY;
 const paintSign = MY.paintSign;
 MY.onBoard = () => AC.focusTasks();
@@ -689,13 +717,15 @@ function animate(f, moving, seated, t) {
 }
 function updateAvatar(now, dt) {
   if (!me.fig) return;
-  if (mode === 'walk') moveAvatar(dt); else me.moving = false;
+  if (mode !== 'walk') me.moving = false;
+  else if (!Town?.drive(dt, keys, cam, !!drag)) moveAvatar(dt);      // in the cart, the cart moves you
   const want = me.moving ? me.heading : me.fig.rot;
   const diff = ((want - me.fig.rot + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
   me.fig.rot += diff * Math.min(1, dt * 12);
   me.fig.root.position.set(me.x, me.y ?? 0, me.z);
   me.fig.root.rotation.y = me.fig.rot;
   animate(me.fig, me.moving, false, now / 1000);
+  Town?.pose(me.fig);
 }
 
 // third-person camera that stays on the avatar's side of walls
@@ -734,6 +764,8 @@ function findNear() {
   offer(d(...SHELVES), 2.6, 'Open the library', () => AC.openLibrary());
   offer(d(...BOARD), 2.6, 'Look at the task wall', () => AC.focusTasks());
   peerNear(offer);
+  Town?.near(offer);
+  Arena?.near(offer);
   return best;
 }
 
@@ -763,7 +795,7 @@ el.addEventListener('pointermove', (e) => {
     const fx = Math.cos(orbit.az), fz = -Math.sin(orbit.az);
     orbit.target.x -= (dx * fx + dy * Math.sin(orbit.az)) * k;
     orbit.target.z -= (dx * fz + dy * Math.cos(orbit.az)) * k;
-    orbit.target.x = Math.max(-150, Math.min(190, orbit.target.x)); orbit.target.z = Math.max(-10, Math.min(40, orbit.target.z));
+    orbit.target.x = Math.max(-150, Math.min(190, orbit.target.x)); orbit.target.z = Math.max(-10, Math.min(62, orbit.target.z));
   } else {
     orbit.az -= dx * 0.006;
     orbit.polar = Math.max(0.25, Math.min(1.35, orbit.polar - dy * 0.005));
@@ -830,8 +862,26 @@ function placeMyPlate() {
 // ---------------------------------------------------------------------------------------------
 const net = { ws: null, self: null, lastPos: '', lastSent: 0 };
 const peersV = new Map();                         // id -> a coworker on the campus
-const plotOwner = PLOTS.map(() => null);
-const officeCache = new Map();                    // plot -> built office (kept when someone leaves)
+const norm = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+// A place on the wire is written in the frame of the nearest office (whose owner everybody knows), so it means
+// the same spot in every window although each window draws the campus around its own office.
+function toWire(x, z, rot = 0) {
+  let L = MYLOT, id = net.self?.id ?? '', best = Math.hypot(x - 16, z - 10);
+  for (const p of peersV.values()) {
+    if (!p.lot) continue;
+    const [cx, cz] = p.lot.w(16, 10), dd = Math.hypot(x - cx, z - cz);
+    if (dd < best) { best = dd; L = p.lot; id = p.id; }
+  }
+  const [dx, dz] = L.l(x, z);
+  return { anchor: id, dx: +dx.toFixed(2), dz: +dz.toFixed(2), rot: +norm(rot - L.rot).toFixed(2) };
+}
+function fromWire(w) {
+  if (!w || typeof w !== 'object' || !w.anchor) return null;
+  const L = w.anchor === net.self?.id ? MYLOT : peersV.get(w.anchor)?.lot;
+  if (!L || !Number.isFinite(w.dx) || !Number.isFinite(w.dz)) return null;
+  const [x, z] = L.w(Math.max(-200, Math.min(200, w.dx)), Math.max(-200, Math.min(200, w.dz)));
+  return { x, z, rot: (Number.isFinite(w.rot) ? w.rot : 0) + L.rot };
+}
 const projV = new THREE.Vector3();
 function toScreen(x, y, z) {
   projV.set(x, y, z).project(camera);
@@ -850,7 +900,7 @@ function sendMe() { netSend({ type: 'me', name: me.look?.name || S.foreman?.user
 
 function onNet(m) {
   switch (m.type) {
-    case 'self': net.self = m; updatePeerChip(); break;
+    case 'self': net.self = m; assignLots(); updatePeerChip(); break;
     case 'peer.join': upsertPeer(m.peer); break;
     case 'peer.presence': { const p = peersV.get(m.id); if (p) { p.name = m.name; p.look = m.look; refreshPeerLook(p); } break; }
     case 'peer.office': { const p = peersV.get(m.id); if (p) p.office = m.office; break; }
@@ -862,6 +912,7 @@ function onNet(m) {
       AC.toast(`${m.name}: ${m.text}`);
       break;
     }
+    case 'peer.g': { const p = peersV.get(m.id); if (p && m.d && typeof m.d === 'object' && typeof m.k === 'string') { Town?.onGame(p, m.k, m.d); Arena?.onGame(p, m.k, m.d); } break; }
     case 'peer.gone': dropPeer(m.id); break;
     case 'notice': AC.toast(m.text, 'warn'); break;
   }
@@ -869,26 +920,48 @@ function onNet(m) {
 
 function upsertPeer(v) {
   let p = peersV.get(v.id);
+  const fresh = !p;
   if (!p) {
-    const slot = plotOwner.indexOf(null);
-    if (slot < 0) return;                                   // the campus is full
-    plotOwner[slot] = v.id;
-    const O = officeCache.get(slot) ?? buildOffice(PLOTS[slot], false);
-    officeCache.set(slot, O);
-    O.G.visible = true; O.cardKey = '';
-    freeLots[slot].visible = false;
-    p = { id: v.id, slot, ox: PLOTS[slot], O, agents: new Map(), avatar: null, chat: null, dom: null };
-    O.onPodium = () => AC.toast(`Only ${p.name} can answer their team's questions.`);
-    O.onMerge = O.onPodium;
-    O.onLibrary = () => AC.toast(`${p.name}'s library stays private.`);
-    O.onBoard = () => openPeerTasks(p);
+    p = { id: v.id, lot: null, O: null, agents: new Map(), avatar: null, chat: null, dom: null };
     peersV.set(v.id, p);
     AC.toast(`${v.name || 'A coworker'} is on the campus.`);
     AC.addFeed({ ts: Date.now(), kind: 'system', text: `${v.name || 'A coworker'} joined the campus` });
   }
   Object.assign(p, { name: v.name, look: v.look, office: v.office, pos: v.pos, addr: v.addr });
+  assignLots();
   refreshPeerLook(p);
   updatePeerChip();
+  if (fresh) { Town?.onJoin(p); Arena?.onJoin(p); }
+}
+// Everyone orders the campus the same way: players sorted by id take the lots in pairs across the road. Each
+// window then shows that same campus, moved (and, if your own lot is a south one, turned around) so that your
+// office is the one at the origin. That keeps distances and neighbours the same for everybody.
+function assignLots() {
+  if (!net.self) return;
+  const ids = [net.self.id, ...peersV.keys()].sort();
+  const r0 = ids.indexOf(net.self.id), c0 = r0 >> 1, s0 = r0 & 1;
+  const moves = [];
+  for (const p of peersV.values()) {
+    const r = ids.indexOf(p.id), c = r >> 1, s = r & 1;
+    const col = s0 ? c0 - c : c - c0, south = s0 ? !s : !!s;
+    const L = LOTS.find((l) => l.col === col && l.south === south) ?? null;      // null: the campus is full
+    if (L !== p.lot) moves.push([p, L]);
+  }
+  for (const [p] of moves) if (p.lot) { p.O.G.visible = false; p.lot.owner = null; p.lot = null; p.O = null; }
+  for (const [p, L] of moves) {
+    if (!L) continue;
+    const O = (L.office ??= buildOffice(L, false));
+    O.G.visible = true; O.cardKey = '';
+    L.owner = p.id; p.lot = L; p.O = O;
+    O.onPodium = () => AC.toast(`Only ${p.name} can answer their team's questions.`);
+    O.onMerge = O.onPodium;
+    O.onLibrary = () => AC.toast(`${p.name}'s library stays private.`);
+    O.onBoard = () => openPeerTasks(p);
+    O.paintSign(`${p.name || 'Coworker'}'s office`);
+    L.deco.visible = true;
+    Town?.dressLot(L);
+  }
+  for (const L of LOTS) { L.free.visible = !L.owner; L.deco.visible = !!L.owner || Math.abs(L.col) <= 1; }
 }
 function dropPeer(id, quiet) {
   const p = peersV.get(id);
@@ -896,15 +969,15 @@ function dropPeer(id, quiet) {
   if (p.avatar) scene.remove(p.avatar.fig.root);
   for (const g of p.agents.values()) { scene.remove(g.fig.root); g.plate?.remove(); }
   p.dom?.plate.remove(); p.dom?.say.remove();
-  p.O.G.visible = false;
-  freeLots[p.slot].visible = true;
-  plotOwner[p.slot] = null;
+  if (p.lot) { p.O.G.visible = false; p.lot.owner = null; p.lot = null; p.O = null; }
+  Town?.onLeave(p); Arena?.onLeave(p);
   peersV.delete(id);
+  assignLots();
   if (!quiet) { AC.toast(`${p.name} left the campus.`); AC.addFeed({ ts: Date.now(), kind: 'system', text: `${p.name} left the campus` }); }
   updatePeerChip();
 }
 function refreshPeerLook(p) {
-  p.O.paintSign(`${p.name || 'Coworker'}'s office`);
+  p.O?.paintSign(`${p.name || 'Coworker'}'s office`);
   const key = JSON.stringify(p.look);
   if (p.avatar && p.avatar.key === key) return;
   if (p.avatar) scene.remove(p.avatar.fig.root);
@@ -917,24 +990,17 @@ function refreshPeerLook(p) {
 
 // a coworker's avatar: positions arrive relative to an office (theirs, yours, or someone else's)
 function placePeerAvatar(p, now, dt) {
-  const av = p.avatar, pos = p.pos;
-  let base = null;
-  if (pos?.anchor) {
-    if (pos.anchor === net.self?.id) base = 0;
-    else if (pos.anchor === p.id) base = p.ox;
-    else if (peersV.has(pos.anchor)) base = peersV.get(pos.anchor).ox;
-  }
-  if (!av || base === null) { if (av) { av.fig.root.visible = false; av.shown = false; } return; }
-  const tx = base + pos.dx, tz = pos.dz;
-  if (!av.shown || Math.hypot(tx - av.x, tz - av.z) > 12) { av.x = tx; av.z = tz; av.rot = pos.rot; av.shown = true; }
+  const av = p.avatar, at = p.pos ? fromWire(p.pos) : null;
+  if (!av || !at) { if (av) { av.fig.root.visible = false; av.shown = false; } Town?.peerPose(p, null); return; }
+  if (!av.shown || Math.hypot(at.x - av.x, at.z - av.z) > 12) { av.x = at.x; av.z = at.z; av.rot = at.rot; av.shown = true; }
   const k = Math.min(1, dt * 10);
-  av.x += (tx - av.x) * k; av.z += (tz - av.z) * k;
-  const diff = ((pos.rot - av.rot + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-  av.rot += diff * Math.min(1, dt * 12);
+  av.x += (at.x - av.x) * k; av.z += (at.z - av.z) * k;
+  av.rot += norm(at.rot - av.rot) * Math.min(1, dt * 12);
   av.fig.root.visible = true;
   av.fig.root.position.set(av.x, 0, av.z);
   av.fig.root.rotation.y = av.rot;
-  animate(av.fig, pos.moving, false, now / 1000 + p.slot);
+  animate(av.fig, p.pos.moving, false, now / 1000 + p.id.charCodeAt(0));
+  Town?.peerPose(p, av);
 }
 
 // a coworker's agents, walking their own office from the activity summary
@@ -965,11 +1031,12 @@ function placePeerAgents(p, now, dt) {
     if (moving) { const s = Math.min(1, 4.2 * dt / dist); g.x += dx * s; g.y += dy * s; g.heading = Math.atan2(dx, dy); }
     const sit = !moving && seated, deskSeat = sit && st === 'desk';
     const f = g.fig;
-    f.root.position.set(p.ox + g.x, sit ? -0.22 : 0, deskSeat ? g.y - 0.5 : g.y);
+    const [wx, wz] = p.lot.w(g.x, deskSeat ? g.y - 0.5 : g.y);
+    f.root.position.set(wx, sit ? -0.22 : 0, wz);
     const want = moving ? g.heading : (!a.active || st === 'lounge') ? 0 : st === 'meeting' ? (g.y < 16 ? 0 : Math.PI) : Math.PI;
     const diff = ((want - g.rot + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
     g.rot += diff * Math.min(1, dt * 10);
-    f.root.rotation.y = g.rot;
+    f.root.rotation.y = g.rot + p.lot.rot;
     const working = a.active && !a.paused && ['thinking', 'reading', 'editing', 'running', 'testing'].includes(a.state);
     if (moving || !sit) animate(f, moving, false, t + g.rot);
     else {
@@ -984,7 +1051,7 @@ function placePeerAgents(p, now, dt) {
   dressOffice(p.O, owners, p.office?.open ?? 0, now);
   fillCards(p.O, p.office?.tasks ?? []);
 }
-const insidePeer = (p) => mode === 'walk' && me.x > p.ox && me.x < p.ox + 32 && me.z > 0 && me.z < 20.2;
+const insidePeer = (p) => mode === 'walk' && !!p.lot?.inside(me.x, me.z);
 
 // nameplates for coworkers, their agents (while you are in their office) and chat bubbles
 function peerPlates() {
@@ -1025,11 +1092,9 @@ function peerPlates() {
   }
 }
 function insideAt(x, z) {
-  if (z > 0 && z < 20.2) {
-    if (x > 0 && x < 32) return 'in your office';
-    for (const q of peersV.values()) if (x > q.ox && x < q.ox + 32) return `in ${q.name}'s office`;
-  }
-  return 'on the campus';
+  if (MYLOT.inside(x, z)) return 'in your office';
+  for (const q of peersV.values()) if (q.lot?.inside(x, z)) return `in ${q.name}'s office`;
+  return Town?.where(x, z) ?? 'on the campus';
 }
 
 // read-only views of a coworker's team
@@ -1059,11 +1124,11 @@ function openPeerTasks(p) {
 function peerNear(offer) {
   const d = (x, z) => Math.hypot(me.x - x, me.z - z);
   for (const p of peersV.values()) {
-    if (p.avatar?.shown) offer(d(p.avatar.x, p.avatar.z), 2, `Chat with ${p.name}`, () => { AC.prefill('/chat '); });
-    if (Math.abs(me.x - (p.ox + 16)) > 24) continue;
+    if (p.avatar?.shown) offer(d(p.avatar.x, p.avatar.z), 2, `Talk to ${p.name}`, () => { AC.prefill('/say '); });
+    if (!p.lot || d(...p.lot.w(16, 10)) > 30) continue;
     for (const g of p.agents.values()) if (g.head) offer(d(g.head[0], g.head[2]), 1.8, `Watch ${g.a.name} (${p.name}'s team)`, () => openPeerAgent(p, g.a));
-    offer(d(p.ox + 28.6, 9.25), 2.3, `${p.name}'s podium`, () => p.O.onPodium());
-    offer(d(p.ox + 13.75, 0.6), 2.6, `Look at ${p.name}'s task wall`, () => openPeerTasks(p));
+    offer(d(...p.lot.w(28.6, 9.25)), 2.3, `${p.name}'s podium`, () => p.O.onPodium());
+    offer(d(...p.lot.w(13.75, 0.6)), 2.6, `Look at ${p.name}'s task wall`, () => openPeerTasks(p));
   }
 }
 
@@ -1071,12 +1136,7 @@ function peerNear(offer) {
 function sendPos(now) {
   if (!net.ws || net.ws.readyState !== 1 || !net.self) return;
   if (now - net.lastSent < 100) return;
-  let anchor = '', ox = 0;
-  if (me.fig) {
-    anchor = net.self.id; let best = Math.abs(me.x - 16);
-    for (const p of peersV.values()) { const dd = Math.abs(me.x - (p.ox + 16)); if (dd < best) { best = dd; anchor = p.id; ox = p.ox; } }
-  }
-  const msg = { type: 'pos', anchor, dx: +(me.x - ox).toFixed(2), dz: +me.z.toFixed(2), rot: +(me.fig?.rot ?? 0).toFixed(2), moving: me.moving };
+  const msg = me.fig ? { type: 'pos', ...toWire(me.x, me.z, me.fig.rot), moving: me.moving, car: !!Town?.driving() } : { type: 'pos', anchor: '', dx: 0, dz: 0, rot: 0, moving: false };
   const key = JSON.stringify(msg);
   if (key === net.lastPos && now - net.lastSent < 2000) return;
   net.lastPos = key; net.lastSent = now;
@@ -1148,6 +1208,7 @@ netConnect();
 function updatePeers(now, dt) {
   for (const p of peersV.values()) {
     placePeerAvatar(p, now, dt);
+    if (!p.lot) continue;
     placePeerAgents(p, now, dt);
     p.O.roof.visible = !insidePeer(p);
   }
@@ -1157,9 +1218,19 @@ function updatePeers(now, dt) {
 }
 
 Game = initGame({
-  THREE, scene, camera, el, floorEl, overlayEl, me, mat, AC, S, sun, hemi, PLOTS, blocked, busy, toScreen,
-  getMode: () => mode, isVisible: () => !!window.View3D?.visible,
+  THREE, scene, camera, el, floorEl, overlayEl, me, mat, AC, S, sun, hemi, blocked, busy, toScreen,
+  lots: () => [MYLOT, ...LOTS], getMode: () => mode, isVisible: () => !!window.View3D?.visible,
 });
+const W = {
+  THREE, scene, camera, el, floorEl, overlayEl, me, cam, mat, M, AC, S, box, plane, colliders, blocked, busy, toScreen, toWire, fromWire, netSend,
+  peersV, MYLOT, LOTS, PX, buildFigure, skinMaterials, animate, shade,
+  build: (L, parent, fn) => { const prev = BUILD; BUILD = { parent, lot: L }; try { return fn(); } finally { BUILD = prev; } },
+  bubble: (text) => { myChat = { text, until: Date.now() + 8000 }; },
+  getMode: () => mode, isVisible: () => !!window.View3D?.visible, myId: () => net.self?.id ?? '', myName: () => me.look?.name || 'You', game: () => Game,
+};
+Town = initTown(W);
+window.WRView = { me, cam, orbit, peersV, MYLOT, LOTS, placeCamera, colliders };   // for tests and screenshots
+Arena = initArena(W, Town);
 setMode(mode);
 window.View3D = {
   visible: false,
@@ -1167,9 +1238,13 @@ window.View3D = {
     this.visible = v;
     el.style.display = v ? 'block' : 'none';
     for (const x of [btnMode, btnAvatar, help]) x.style.display = v ? '' : 'none';
-    myPlate.hidden = !v; if (!v) { hint.hidden = true; peerPlates(); placeMySay(); Game?.show(false); }
+    myPlate.hidden = !v; if (!v) { hint.hidden = true; peerPlates(); placeMySay(); Game?.show(false); Arena?.show(false); }
   },
   chat: (text) => chat(text),
+  say: (text) => Town?.say(text),
+  announce: (text) => Town?.announce(text),
+  cart: () => Town?.recall(),
+  arena: (args) => Arena?.command(args),
   render(now, dt) {
     resize();
     paintCode(now);
@@ -1177,6 +1252,8 @@ window.View3D = {
     updateDesks();
     updateAvatar(now, dt);
     Game?.update(now, dt);
+    Town?.update(now, dt);
+    Arena?.update(now, dt);
     roof.visible = walkOutside();
     frontWall.visible = mode === 'walk';
     if (mode === 'walk' && me.fig) placeWalkCamera();

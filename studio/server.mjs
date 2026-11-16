@@ -148,7 +148,14 @@ function cleanLook(l) {
 const num = (v, lo, hi) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : 0);
 function cleanPos(p) {
   if (!p || typeof p !== 'object') return null;
-  return { anchor: str(p.anchor, 16), dx: num(p.dx, -200, 200), dz: num(p.dz, -200, 200), rot: num(p.rot, -20, 20), moving: !!p.moving };
+  return { anchor: str(p.anchor, 16), dx: num(p.dx, -200, 200), dz: num(p.dz, -200, 200), rot: num(p.rot, -20, 20), moving: !!p.moving, car: !!p.car };
+}
+// game traffic between windows (announcements, cars, cell locks, nearby talk, the arena): relayed as it is, small and
+// rate-limited. The server gives it no meaning and it can reach nothing but the other windows, which treat it as untrusted.
+function cleanGame(m) {
+  if (typeof m.k !== 'string' || !/^[a-z.]{1,16}$/.test(m.k) || !m.d || typeof m.d !== 'object') return null;
+  let size = 0; try { size = JSON.stringify(m.d).length; } catch { return null; }
+  return size > 6000 ? null : { k: m.k, d: m.d };
 }
 const STATES = new Set(['idle', 'thinking', 'reading', 'editing', 'running', 'testing', 'waiting_user', 'blocked', 'done', 'error']);
 const STATIONS = new Set(['desk', 'library', 'terminal', 'testbench', 'mergestation', 'meeting', 'lounge', 'user']);
@@ -228,7 +235,8 @@ const seen = new Map();         // id -> { addr, port, name, first }
 function sendTo(ws, m) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m)); }
 function toPeers(m) { for (const p of peers.values()) sendTo(p.ws, m); }
 function proof() { return self.code ? crypto.createHash('sha256').update('warroom-team:' + self.code).digest('hex').slice(0, 32) : ''; }
-function hello() { return { t: 'hello', app: 'warroom-peer', v: 1, id: self.id, name: self.name, proof: proof() }; }
+const PROTO = 2;               // 2: positions in the nearest office's own frame (offices on both sides of the road), game relay
+function hello() { return { t: 'hello', app: 'warroom-peer', v: PROTO, id: self.id, name: self.name, proof: proof() }; }
 // a team-code mismatch is retried every few seconds: tell the window once per address, until the code changes
 const refusedSeen = new Set();
 function codeNotice(addr, text) { if (refusedSeen.has(addr) || refusedSeen.size > 50) return; refusedSeen.add(addr); toApps({ type: 'notice', text }); }
@@ -244,11 +252,16 @@ function attachPeer(ws, addr, outbound) {
     if (--budget < 0) return;
     let m; try { m = JSON.parse(data.toString()); } catch { return; }
     if (!peer) {
-      if (m.t === 'denied') { log(`peer ${addr} refused us: ${str(m.why, 60)}`); codeNotice(addr, `${addr} did not let you in: their team code is different from yours.`); ws.close(); return; }
+      if (m.t === 'denied') { log(`peer ${addr} refused us: ${str(m.why, 60)}`); codeNotice(addr, m.why === 'version' ? `${addr} runs a different War Room version. Update both to the same one.` : `${addr} did not let you in: their team code is different from yours.`); ws.close(); return; }
       if (m.t !== 'hello' || m.app !== 'warroom-peer' || typeof m.id !== 'string' || !/^[a-f0-9]{16}$/.test(m.id) || m.id === self.id) { ws.close(); return; }
       if (str(m.proof, 64) !== proof()) {
         sendTo(ws, { t: 'denied', why: 'different team code' });
         codeNotice(addr, `${str(m.name, 24) || 'Someone'} (${addr}) tried to join with a different team code.`);
+        ws.close(); return;
+      }
+      if (m.v !== PROTO) {
+        sendTo(ws, { t: 'denied', why: 'version' });
+        codeNotice(addr, `${str(m.name, 24) || 'Someone'} (${addr}) runs a different War Room version. Update both to the same one.`);
         ws.close(); return;
       }
       refusedSeen.delete(addr);
@@ -270,6 +283,7 @@ function attachPeer(ws, addr, outbound) {
       case 'office': peer.office = cleanOffice(m.office); toApps({ type: 'peer.office', id: peer.id, office: peer.office }); break;
       case 'pos': peer.pos = cleanPos(m); toApps({ type: 'peer.pos', id: peer.id, pos: peer.pos }); break;
       case 'chat': { const text = str(m.text, 300).trim(); if (text) toApps({ type: 'peer.chat', id: peer.id, name: peer.name, text, ts: Date.now() }); break; }
+      case 'g': { const g = cleanGame(m); if (g) toApps({ type: 'peer.g', id: peer.id, k: g.k, d: g.d }); break; }
       case 'bye': ws.close(); break;
     }
   });
@@ -297,6 +311,7 @@ if (!NO_LAN) {
   const peerHttp = http.createServer((req, res) => res.writeHead(404).end());
   const peerWss = new WebSocketServer({ server: peerHttp, path: '/peer', maxPayload: 256 * 1024 });
   peerWss.on('connection', (ws, req) => attachPeer(ws, (req.socket.remoteAddress ?? '?').replace(/^::ffff:/, ''), false));
+  peerWss.on('error', () => {});                   // ws repeats the listen error of its http server: reported just below
   peerHttp.on('error', (e) => log(`LAN port ${PEER_PORT} unavailable (${e.code}); others cannot connect to us, we still connect to them`));
   peerHttp.listen(PEER_PORT, '0.0.0.0', () => log(`LAN: peers on tcp ${PEER_PORT}, discovery on udp ${DISCO_PORT}`));
 
@@ -377,6 +392,13 @@ function worldApp(ws) {
         toPeers({ t: 'chat', text });
         break;
       }
+      case 'g': {
+        const g = cleanGame(m);
+        if (!g) break;
+        const out = { t: 'g', k: g.k, d: g.d };
+        if (Array.isArray(m.to)) { for (const id of m.to.slice(0, 16)) { const p = peers.get(id); if (p) sendTo(p.ws, out); } } else toPeers(out);
+        break;
+      }
       case 'peer.add': {
         const h = str(m.host, 120).trim();
         if (!h || !/^[\w.\-:[\]]+$/.test(h)) { sendTo(ws, { type: 'notice', text: 'That is not a PC name or address.' }); break; }
@@ -396,7 +418,7 @@ function worldApp(ws) {
       case 'self': sendTo(ws, selfView()); break;
     }
   });
-  ws.on('close', () => { apps.delete(ws); if (!apps.size) { self.pos = null; toPeers({ t: 'pos', anchor: '', dx: 0, dz: 0, rot: 0, moving: false }); } });
+  ws.on('close', () => { apps.delete(ws); if (!apps.size) { self.pos = null; toPeers({ t: 'pos', anchor: '', dx: 0, dz: 0, rot: 0, moving: false }); toPeers({ t: 'g', k: 'away', d: {} }); } });
   ws.on('error', () => {});
 }
 summaryClient();

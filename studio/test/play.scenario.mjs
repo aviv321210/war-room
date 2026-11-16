@@ -1,7 +1,7 @@
 // the play layer in open ground: build with the mouse, break, fight, drink, die. Needs stack #1 running (see HANDOFF.md).
 export default async function ({ page, sleep, token, SP }) {
   const t1 = token(`${process.env.USERPROFILE}/.agentcraft/studio.json`);
-  const p = await page('game', `http://127.0.0.1:7880/?t=${t1}#walk=60,33`);
+  const p = await page('game', `http://127.0.0.1:7880/?t=${t1}#walk=-25,-12`);
   await sleep(7000);
   const st = async (tag) => p.log(tag + ' ' + JSON.stringify(await p.ev(`WRGame.state()`)));
   await p.ev(`WRGame.time(0.2); WRGame.peace(true)`); await sleep(400);

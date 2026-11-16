@@ -773,7 +773,9 @@ const HELP = `Plain text: a new goal for the team
 /pause @x, /resume @x, /stop @x, /spawn @x [task]
 /task <id> cancel|retry|prioritize|reassign <agent>
 /diff @x: see an agent's changes
-/chat <text>: say something to coworkers on the campus
+/chat <text>: to everyone on the campus   /say <text>: only to who stands near you
+/announce <text>: pin a note on the announcement boards   /cart: bring your cart
+/arena: the agent arena (squad, rules, budget)   /order <name|all> <text>: order your operatives
 /library: shared memory   J: next decision`;
 
 cmd.addEventListener('keydown', async (e) => {
@@ -823,11 +825,14 @@ async function runCommand(v) {
   switch (c.toLowerCase()) {
     case 'help': case '?': toast(HELP); return;
     case 'library': case 'memory': openLibrary(); return;
-    case 'chat': case 'say': {
-      const text = v.replace(/^\/\w+\s*/, '');
-      if (!text) return toast('Write something after /chat.', 'warn');
-      if (!window.View3D?.chat) return toast('Chat needs the 3D view.', 'warn');
-      window.View3D.chat(text);
+    case 'chat': case 'say': case 'announce': case 'post': case 'cart': case 'car': case 'arena': case 'order': {
+      const text = v.replace(/^\/\w+\s*/, ''), k = c.toLowerCase();
+      if (!window.View3D?.chat) return toast('That needs the 3D view.', 'warn');
+      if (k === 'cart' || k === 'car') return window.View3D.cart();
+      if (k === 'arena') return window.View3D.arena(text);
+      if (k === 'order') return window.View3D.arena('order ' + text);
+      if (!text) return toast(`Write something after /${k}.`, 'warn');
+      if (k === 'chat') window.View3D.chat(text); else if (k === 'say') window.View3D.say(text); else window.View3D.announce(text);
       return;
     }
     case 'status': toast(`${[...S.agents.values()].filter((a) => a.active).length} agents on shift, ${[...S.tasks.values()].filter((t) => !['done', 'cancelled'].includes(t.status)).length} open tasks, ${openDecisions().length} waiting on you${typeof S.foreman?.costUsd === 'number' ? `, $${S.foreman.costUsd.toFixed(2)} spent` : ''}`); return;

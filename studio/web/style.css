@@ -279,3 +279,10 @@ kbd { background: var(--paper); color: var(--ink); border-radius: 4px; padding: 
 .recipe .cost.short { color: #b9543f; }
 .recipe:disabled { opacity: .55; cursor: default; }
 .m-foot .muted { margin-right: auto; }
+
+/* shared campus things: announcement board */
+.notes { list-style: none; margin: 0 0 6px; padding: 0; display: grid; gap: 8px; }
+.notes li { background: var(--paper, #f4efe6); color: #3d2a1e; border-radius: 6px; padding: 8px 10px; }
+.notes li .muted { color: #7a6a5c; font-size: 12px; }
+.notes li a { font-size: 12px; margin-left: 6px; }
+.notes li div { margin-top: 3px; overflow-wrap: anywhere; }
