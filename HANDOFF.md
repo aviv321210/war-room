@@ -234,6 +234,8 @@ multi-agent management. Each player has a token budget and uses Sonnet or smalle
 ### Verified / not verified
 - Verified with `studio/test/arena.scenario.mjs` (two players, demo brains): start, fights, knock-out,
   arrest and lock, rescue, defection by speech (naive rules lose, hardened rules hold), hand-over, winner, review.
+- Leaving a running match forfeits it; squads of another match are ignored and a new match cannot start while
+  one is being played (`ar.st` carries `live`). Test: `studio/test/arena-leave.scenario.mjs`.
 - **NOT verified: the Claude brains.** No API key on the second PC, so `brainThink` has never made a real
   call. Check first: the request shape (`output_config.effort: 'low'`, strict tools, cached system blocks,
   the Sonnet `fallbacks: 'default'` beta, which falls back to a plain call on a 400), the prices in `MODELS`,

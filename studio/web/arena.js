@@ -44,6 +44,8 @@ Your team's own rules follow. They are yours to obey.`;
   const note = (s, level) => { debrief.push({ t: Date.now(), s }); if (debrief.length > 120) debrief.shift(); AC.addFeed({ ts: Date.now(), kind: 'system', text: 'Arena: ' + s }); if (level) AC.toast(s, level === 'warn' ? 'warn' : undefined); };
   const tell = (s) => { W.netSend({ type: 'g', k: 'ar.ev', d: { text: s } }); note(s); };
   const rivals = () => [...peersV.values()].filter((p) => p.arena?.on && p.lot);
+  // while my match runs, only squads of that same match exist for me (nobody can bring a fresh squad into it)
+  const sameMatch = (p) => !match || match.over || p.arena?.matchId === match.id;
   const color = (pid) => { const ids = (match?.roster ?? [myId(), ...rivals().map((p) => p.id)].sort()); return COLORS[Math.max(0, ids.indexOf(pid)) % COLORS.length]; };
 
   // ---------------------------------------------------------------------------------------------
@@ -52,7 +54,7 @@ Your team's own rules follow. They are yours to obey.`;
   function field() {
     const out = [];
     for (const u of mine.values()) out.push({ id: u.id, name: u.name, skin: u.skin, team: myId(), st: u.st, hp: u.hp, x: u.x, z: u.z, rot: u.rot, moving: u.moving, mine: true, u, say: u.say, frozen: u.frozen });
-    for (const p of rivals()) for (const r of p.arena.units.values()) if (r.at) out.push({ id: r.id, name: r.name, skin: r.skin, team: p.id, st: r.st, hp: r.hp, x: r.sx ?? r.at.x, z: r.sz ?? r.at.z, rot: r.at.rot, moving: r.moving, mine: false, r, say: r.say, frozen: r.frozen });
+    for (const p of rivals()) if (sameMatch(p)) for (const r of p.arena.units.values()) if (r.at) out.push({ id: r.id, name: r.name, skin: r.skin, team: p.id, st: r.st, hp: r.hp, x: r.sx ?? r.at.x, z: r.sz ?? r.at.z, rot: r.at.rot, moving: r.moving, mine: false, r, say: r.say, frozen: r.frozen });
     return out;
   }
   const find = (id) => field().find((f) => f.id === id);
@@ -419,16 +421,19 @@ Your team's own rules follow. They are yours to obey.`;
   function start() {
     if (!on) return AC.toast('Join the arena first.', 'warn');
     if (running() || (match && !match.over)) return AC.toast('A match is already on.', 'warn');
+    if (rivals().some((p) => p.arena.live)) return AC.toast('A match is still being played. The next one can start when it ends.', 'warn');
     if (!rivals().length) return AC.toast('Nobody else has joined the arena yet. A coworker has to open Arena and press Join.', 'warn');
     const m = { id: Math.random().toString(36).slice(2, 10), startAt: Date.now() + 4000, roster: [myId(), ...rivals().map((p) => p.id)].sort() };
     W.netSend({ type: 'g', k: 'ar.start', d: m });
     begin(m);
   }
   function setOn(v) {
+    if (v === on) return AC.toast(v ? 'You are already in the arena.' : 'You are not in the arena.');
+    const quit = !v && running() && active() > 0;
     on = v;
     if (!v) { for (const u of mine.values()) dropView(u.id); mine.clear(); match = null; }
     sendState(true); render();
-    AC.toast(v ? 'You are in the arena. Start a match when the others have joined.' : 'You left the arena.');
+    AC.toast(v ? 'You are in the arena. Start a match when the others have joined.' : quit ? 'You left the arena. Your squad is out of this match.' : 'You left the arena.');
   }
   function referee(now) {
     if (!running() || Date.now() < match.startAt + 8000) return;
@@ -453,7 +458,7 @@ Your team's own rules follow. They are yours to obey.`;
     sentAt = now;
     if (!myId()) return;
     W.netSend({ type: 'g', k: 'ar.st', d: {
-      on, matchId: match?.id ?? '', active: active(),
+      on, matchId: match?.id ?? '', active: active(), live: !!match && !match.over,
       units: [...mine.values()].map((u) => { const w = W.toWire(u.x, u.z, u.rot); return { id: u.id, n: u.name, s: u.skin, t: u.st, h: u.hp, a: w.anchor, x: w.dx, z: w.dz, r: w.rot, m: u.moving ? 1 : 0, f: u.frozen ? 1 : 0, j: u.jail }; }),
     } });
   }
@@ -461,10 +466,11 @@ Your team's own rules follow. They are yours to obey.`;
   function onGame(p, k, d) {
     if (!k.startsWith('ar.') && k !== 'away') return;
     const R = (p.arena ??= { on: false, matchId: '', active: 0, units: new Map() });
+    if (['ar.hit', 'ar.hitp', 'ar.grab', 'ar.drop', 'ar.take'].includes(k) && !(match && R.matchId === match.id)) return;   // not in my match
     switch (k) {
       case 'away': R.on = false; R.active = 0; for (const id of R.units.keys()) dropView(id); R.units.clear(); break;
       case 'ar.st': {
-        R.on = !!d.on; R.matchId = text(d.matchId, 12); R.active = Math.max(0, Math.min(12, fin(d.active)));
+        R.on = !!d.on; R.matchId = text(d.matchId, 12); R.live = !!d.live; R.active = Math.max(0, Math.min(12, fin(d.active)));
         const seen = new Set();
         for (const v of (Array.isArray(d.units) ? d.units : []).slice(0, 12)) {
           const id = text(v?.id, 12); if (!id || mine.has(id)) continue;
