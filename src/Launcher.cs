@@ -19,7 +19,7 @@ using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("War Room")]
 [assembly: System.Reflection.AssemblyProduct("War Room")]
-[assembly: System.Reflection.AssemblyVersion("0.2.0.0")]
+[assembly: System.Reflection.AssemblyVersion("0.3.0.0")]
 
 static class Launcher
 {
@@ -71,7 +71,18 @@ static class Launcher
 
     static int Start(Settings s)
     {
-        string backend = s.Mode == "apikey" ? "claude" : "sim";
+        string backend = s.Mode == "sim" ? "sim" : "claude";
+        // real agents on your own Claude sign-in: Claude Code's own sign-in first, in its own window and your browser
+        if (s.Mode == "seat" && !PortOpen(ForemanPort) && !SignedIn())
+        {
+            MessageBox.Show("Your coding agents use your own Claude account.\n\nA console window opens now and takes you to the Claude sign-in in your browser. Come back here when it says you are signed in.", Title, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            SignIn();
+            if (!SignedIn())
+            {
+                MessageBox.Show("Not signed in to Claude, so the demo team works in your War Room this time.\n\nStart War Room with Shift held down to choose again.", Title, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                backend = "sim";
+            }
+        }
         // a Foreman of the other mode holds the port: stop it so this mode can start
         string other = backend == "sim" ? "claude" : "sim";
         if (ForemanPid(other) > 0) StopForeman(other);
@@ -91,7 +102,7 @@ static class Launcher
                 }
                 if (token == null)
                 {
-                    string log = StartStudio();
+                    string log = StartStudio(s);
                     if (!WaitFor(delegate { return (token = StudioToken()) != null; }, 30, delegate { return !LogSays(log, @"(Error|in use|Cannot find)"); }))
                         return Fail(splash, "The War Room server did not start.", log);
                 }
@@ -138,6 +149,40 @@ static class Launcher
 
     static string NodeExe { get { return Path.Combine(App, @"runtime\node\node.exe"); } }
 
+    // Claude Code as Anthropic ships it (it comes with the Foreman's packages). Signing in is its own "auth login":
+    // the launcher never sees the password or the token, it only asks whether somebody is signed in.
+    static string ClaudeExe { get { return Path.Combine(App, @"foreman\node_modules\@anthropic-ai\claude-agent-sdk-win32-x64\claude.exe"); } }
+
+    static ProcessStartInfo ClaudeCmd(string args, bool window)
+    {
+        ProcessStartInfo psi = new ProcessStartInfo(ClaudeExe, args);
+        psi.UseShellExecute = false;
+        psi.CreateNoWindow = !window;
+        psi.EnvironmentVariables.Remove("ANTHROPIC_API_KEY");
+        psi.EnvironmentVariables.Remove("ANTHROPIC_AUTH_TOKEN");
+        return psi;
+    }
+
+    static bool SignedIn()
+    {
+        if (!File.Exists(ClaudeExe)) return false;
+        try
+        {
+            using (Process p = Process.Start(ClaudeCmd("auth status", false)))
+            {
+                if (!p.WaitForExit(20000)) { try { p.Kill(); } catch { } return false; }
+                return p.ExitCode == 0;
+            }
+        }
+        catch { return false; }
+    }
+
+    static void SignIn()
+    {
+        if (!File.Exists(ClaudeExe)) return;
+        try { using (Process p = Process.Start(ClaudeCmd("auth login", true))) p.WaitForExit(600000); } catch { /* stays signed out */ }
+    }
+
     static string StartForeman(Settings s, string backend)
     {
         Directory.CreateDirectory(LogDir);
@@ -149,13 +194,20 @@ static class Launcher
         if (s.Budget > 0) args += " --max-budget " + s.Budget.ToString(System.Globalization.CultureInfo.InvariantCulture);
         ProcessStartInfo psi = Hidden(NodeExe, args, Path.Combine(App, "foreman"), log);
         psi.EnvironmentVariables["AGENTCRAFT_HOME"] = Home;
-        if (backend == "claude") psi.EnvironmentVariables["ANTHROPIC_API_KEY"] = s.ApiKey ?? "";
-        File.AppendAllText(log, "\r\n===== " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " War Room launcher: starting the Foreman (" + backend + ")\r\n");
+        if (backend == "claude" && s.Mode == "seat")
+        {
+            // the Foreman's own switch for "use this person's Claude sign-in": no API key is passed on
+            psi.Arguments = psi.Arguments.Replace(" --port " + ForemanPort, " --port " + ForemanPort + " --use-claude-login");
+            psi.EnvironmentVariables.Remove("ANTHROPIC_API_KEY");
+            psi.EnvironmentVariables.Remove("ANTHROPIC_AUTH_TOKEN");
+        }
+        else if (backend == "claude") psi.EnvironmentVariables["ANTHROPIC_API_KEY"] = s.ApiKey ?? "";
+        File.AppendAllText(log, "\r\n===== " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " War Room launcher: starting the Foreman (" + backend + (s.Mode == "seat" && backend == "claude" ? ", Claude sign-in" : "") + ")\r\n");
         Process.Start(psi);
         return log;
     }
 
-    static string StartStudio()
+    static string StartStudio(Settings s)
     {
         Directory.CreateDirectory(LogDir);
         Directory.CreateDirectory(Home);
@@ -163,7 +215,11 @@ static class Launcher
         string args = Q(Path.Combine(App, @"studio\server.mjs")) + " --port " + StudioPort + " --foreman " + ForemanPort +
                       " --foreman-dir " + Q(Path.Combine(App, "foreman")) + " --state " + Q(StudioState);
         File.AppendAllText(log, "\r\n===== " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " War Room launcher: starting the studio server\r\n");
-        Process.Start(Hidden(NodeExe, args, Path.Combine(App, "studio"), log));
+        ProcessStartInfo psi = Hidden(NodeExe, args, Path.Combine(App, "studio"), log);
+        // the arena's agents: your Claude sign-in by default; with the API key mode they use that key
+        if (s.Mode == "apikey" && !string.IsNullOrEmpty(s.ApiKey)) psi.EnvironmentVariables["ANTHROPIC_API_KEY"] = s.ApiKey;
+        else { psi.EnvironmentVariables.Remove("ANTHROPIC_API_KEY"); psi.EnvironmentVariables.Remove("ANTHROPIC_AUTH_TOKEN"); }
+        Process.Start(psi);
         return log;
     }
 
@@ -191,7 +247,7 @@ static class Launcher
         }
         Directory.CreateDirectory(WindowProfile);
         ProcessStartInfo psi = new ProcessStartInfo(edge,
-            "--app=" + Q(url) + " --user-data-dir=" + Q(WindowProfile) + " --window-size=1440,900 --no-first-run --no-default-browser-check");
+            "--app=" + Q(url) + " --user-data-dir=" + Q(WindowProfile) + " --window-size=1440,900 --no-first-run --no-default-browser-check --autoplay-policy=no-user-gesture-required");
         psi.UseShellExecute = false;
         Process.Start(psi);
     }
@@ -302,7 +358,7 @@ static class Launcher
 
     internal class Settings
     {
-        public string Mode = "sim";      // sim | apikey
+        public string Mode = "sim";      // sim | seat | apikey
         public string ApiKey = "";
         public string Repo = "";
         public double Budget = 5;
@@ -316,7 +372,7 @@ static class Launcher
                 int i = line.IndexOf('=');
                 if (i <= 0) continue;
                 string k = line.Substring(0, i).Trim(), v = line.Substring(i + 1).Trim();
-                if (k == "mode") s.Mode = v == "apikey" ? "apikey" : "sim";
+                if (k == "mode") s.Mode = v == "apikey" ? "apikey" : v == "seat" ? "seat" : "sim";
                 else if (k == "repo") s.Repo = v;
                 else if (k == "budget") double.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out s.Budget);
                 else if (k == "apikey" && v.Length > 0)
@@ -362,7 +418,7 @@ static class Launcher
 
     class SettingsForm : Form
     {
-        RadioButton sim = new RadioButton(), api = new RadioButton();
+        RadioButton sim = new RadioButton(), seat = new RadioButton(), api = new RadioButton();
         TextBox key = new TextBox(), repo = new TextBox(), budget = new TextBox();
         Settings result;
 
@@ -381,15 +437,19 @@ static class Launcher
             MaximizeBox = MinimizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
             Font = new Font("Segoe UI", 9.5f);
-            ClientSize = new Size(520, 360);
+            ClientSize = new Size(540, 440);
 
             int y = 16;
-            Controls.Add(Lbl("Who works in your War Room?", 16, y, true)); y += 30;
+            Controls.Add(Lbl("Who works at the desks of your War Room?", 16, y, true)); y += 30;
 
             sim.Text = "Demo team: scripted agents, free, no account needed";
-            sim.SetBounds(24, y, 480, 24); Controls.Add(sim); y += 28;
-            api.Text = "Claude agents: real work on your code (Anthropic API key, billed per use)";
-            api.SetBounds(24, y, 480, 24); Controls.Add(api); y += 36;
+            sim.SetBounds(24, y, 500, 24); Controls.Add(sim); y += 28;
+            seat.Text = "Claude agents on your own Claude sign-in: real work on your code (your plan's usage)";
+            seat.SetBounds(24, y, 510, 24); Controls.Add(seat); y += 28;
+            api.Text = "Claude agents on an Anthropic API key: real work on your code (billed per use)";
+            api.SetBounds(24, y, 500, 24); Controls.Add(api); y += 30;
+            Label hint = Lbl("This is only about the coding agents. The arena game asks for your Claude sign-in inside the app.", 24, y, false);
+            hint.ForeColor = Color.FromArgb(110, 100, 90); Controls.Add(hint); y += 30;
 
             Controls.Add(Lbl("Anthropic API key", 44, y, false)); y += 22;
             key.SetBounds(44, y, 450, 24); key.UseSystemPasswordChar = true; key.Text = s.ApiKey; Controls.Add(key); y += 28;
@@ -426,9 +486,9 @@ static class Launcher
             Controls.Add(ok); Controls.Add(cancel);
             AcceptButton = ok; CancelButton = cancel;
 
-            EventHandler sync = delegate { key.Enabled = repo.Enabled = browse.Enabled = budget.Enabled = get.Enabled = api.Checked; };
-            sim.CheckedChanged += sync; api.CheckedChanged += sync;
-            if (s.Mode == "apikey") api.Checked = true; else sim.Checked = true;
+            EventHandler sync = delegate { key.Enabled = get.Enabled = api.Checked; repo.Enabled = browse.Enabled = budget.Enabled = api.Checked || seat.Checked; };
+            sim.CheckedChanged += sync; seat.CheckedChanged += sync; api.CheckedChanged += sync;
+            if (s.Mode == "apikey") api.Checked = true; else if (s.Mode == "seat") seat.Checked = true; else sim.Checked = true;
             sync(null, null);
         }
 
@@ -445,14 +505,14 @@ static class Launcher
         void OnOk(object sender, EventArgs e)
         {
             Settings s = new Settings();
-            s.Mode = api.Checked ? "apikey" : "sim";
+            s.Mode = api.Checked ? "apikey" : seat.Checked ? "seat" : "sim";
             s.ApiKey = key.Text.Trim();
             s.Repo = repo.Text.Trim();
             double b;
             s.Budget = double.TryParse(budget.Text.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out b) && b > 0 ? b : 5;
-            if (s.Mode == "apikey")
+            if (s.Mode != "sim")
             {
-                if (!s.ApiKey.StartsWith("sk-ant-"))
+                if (s.Mode == "apikey" && !s.ApiKey.StartsWith("sk-ant-"))
                 {
                     MessageBox.Show(this, "Enter your Anthropic API key (it starts with sk-ant-).", Title);
                     return;

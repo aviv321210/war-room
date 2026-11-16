@@ -250,6 +250,8 @@ function toSome(ids, m) {
 }
 function proof() { return self.code ? crypto.createHash('sha256').update('warroom-team:' + self.code).digest('hex').slice(0, 32) : ''; }
 const PROTO = 3;               // 3: sessions (one host passes everything on), shared offices
+const APP_VERSION = '0.3.0', GET_IT = 'github.com/aviv321210/war-room/releases';       // keep in step with src/WarRoom.iss
+const OTHER_VERSION = `Everybody needs the same version: the newest installer is at ${GET_IT}`;
 const MAX_LINKS = 90;
 function hello() { return { t: 'hello', app: 'warroom-peer', v: PROTO, id: self.id, name: self.name, proof: proof(), host: session.mode === 'host' }; }
 // a team-code mismatch is retried every few seconds: tell the window once per address, until the code changes
@@ -363,7 +365,7 @@ function attachPeer(ws, addr, outbound, port = 0) {
           if (session.mode === 'mesh' && /^[\w.\-:]+$/.test(h)) dial(h, Math.round(num(g.port, 1, 65535)) || PEER_PORT);
         } else {
           log(`peer ${addr} refused us: ${why}`);
-          codeNotice(addr, why === 'version' ? `${addr} runs a different War Room version. Update both to the same one.`
+          codeNotice(addr, why === 'version' ? `${addr} runs a different War Room version than yours (${APP_VERSION}). ${OTHER_VERSION}`
             : why === 'two hosts' ? `${addr} is hosting a session too. Only one studio on the network should host.`
             : why === 'full' ? `${addr} has no room for more people.`
             : `${addr} did not let you in: their team code is different from yours.`);
@@ -378,7 +380,7 @@ function attachPeer(ws, addr, outbound, port = 0) {
       }
       if (m.v !== PROTO) {
         sendTo(ws, { t: 'denied', why: 'version' });
-        codeNotice(addr, `${str(m.name, 24) || 'Someone'} (${addr}) runs a different War Room version. Update both to the same one.`);
+        codeNotice(addr, `${str(m.name, 24) || 'Someone'} (${addr}) runs a different War Room version than yours (${APP_VERSION}). ${OTHER_VERSION}`);
         ws.close(); return;
       }
       const theyHost = m.host === true;
@@ -673,7 +675,7 @@ checkSeat();
 const apps = new Set();
 function toApps(m) { const s = JSON.stringify(m); for (const a of apps) if (a.readyState === WebSocket.OPEN) a.send(s); }
 function selfView() {
-  return { type: 'self', id: self.id, name: self.name, addrs: myAddrs(), host: os.hostname(), port: PEER_PORT, code: self.code, hosts: self.hosts, lan: !NO_LAN, discovered: seen.size,
+  return { type: 'self', version: APP_VERSION, id: self.id, name: self.name, addrs: myAddrs(), host: os.hostname(), port: PEER_PORT, code: self.code, hosts: self.hosts, lan: !NO_LAN, discovered: seen.size,
     session: { mode: session.mode, host: session.mode === 'host' ? { id: self.id, name: self.name } : session.host ? { id: session.host.id, name: session.host.name } : null } };
 }
 function worldApp(ws) {

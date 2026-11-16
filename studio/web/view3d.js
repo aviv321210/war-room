@@ -4,6 +4,7 @@ import * as THREE from './vendor/three.module.min.js';
 import { initGame } from './game.js';
 import { initTown } from './town.js';
 import { initArena } from './arena.js';
+import { initVoice } from './voice.js';
 let Town = null, Arena = null, Voice = null;   // shared campus things (board, cart, cells, nearby talk) and the agent arena
 let Game = null;                 // the play layer (blocks, backpack, bugs): see game.js
 
@@ -688,7 +689,7 @@ function setMode(m) {
   if (m === 'overview') placeCamera();
   hint.hidden = true;
   help.innerHTML = m === 'walk'
-    ? '<b>WASD</b> walk &middot; <b>Shift</b> run &middot; <b>Space</b> jump &middot; <b>drag</b> look &middot; <b>click</b> hit &middot; <b>right-click</b> build &middot; <b>1-9</b> item &middot; <b>I</b> backpack &middot; <b>E</b> interact &middot; <b>Enter</b> console'
+    ? '<b>WASD</b> walk &middot; <b>Shift</b> run &middot; <b>Space</b> jump &middot; <b>drag</b> look &middot; <b>click</b> hit &middot; <b>right-click</b> build &middot; <b>1-9</b> item &middot; <b>I</b> backpack &middot; <b>E</b> interact &middot; <b>V</b> talk &middot; <b>Enter</b> console'
     : '<b>drag</b> rotate &middot; <b>right-drag</b> move &middot; <b>wheel</b> zoom &middot; <b>click</b> an agent or the podium &middot; <b>Walk</b> to play as your avatar';
 }
 const inside = () => me.x > 0 && me.x < 32 && me.z > 0 && me.z < 20.2;
@@ -1227,6 +1228,7 @@ function peerPlates() {
     const vis = av && av.shown && av.fig.root.visible && window.View3D.visible;
     const s = vis ? toScreen(av.x, 34 * PX + 0.15, av.z) : { hidden: true };
     p.dom.plate.hidden = s.hidden;
+    p.dom.plate.classList.toggle('talking', !s.hidden && !!Voice?.talking(p.id));
     if (!s.hidden) {
       const where = insideAt(av.x, av.z);
       const html = `<div class="who">${AC.esc(p.name || 'Coworker')}</div><div class="what">${AC.esc(where)}</div>`;
@@ -1359,7 +1361,7 @@ function renderPeersPanel(refresh) {
   // a refresh must not eat what is being typed
   const typed = refresh ? { host: document.getElementById('pp-host')?.value, code: document.getElementById('pp-code')?.value, focus: document.activeElement?.id } : null;
   AC.modal('peers', '', `
-    <div class="m-head"><h1>Coworkers <span class="sub">your campus on the local network</span></h1><button class="x" data-close aria-label="Close">&times;</button></div>
+    <div class="m-head"><h1>Coworkers <span class="sub">your campus on the local network &middot; War Room ${AC.esc(s?.version ?? '')}</span></h1><button class="x" data-close aria-label="Close">&times;</button></div>
     <div class="m-body">
       <p>${list.length ? `On the campus now:` : 'Nobody else yet. Coworkers running War Room on the same network appear by themselves; if they do not, add them by PC name or address.'}</p>
       ${list.length ? `<ul class="peers">${list.map((p) => `<li><b>${AC.esc(p.name)}</b> <span class="muted">${AC.esc(p.addr ?? '')} &middot; ${AC.esc(p.office?.backend === 'sim' ? 'demo team' : p.office?.backend ?? '')}</span></li>`).join('')}</ul>` : ''}
@@ -1467,6 +1469,7 @@ const W = {
 Town = initTown(W);
 window.WRView = { renderer, me, cam, orbit, peersV, MYLOT, LOTS, placeCamera, colliders, office, offices, createOffice, joinOffice, net };   // for tests and screenshots
 Arena = initArena(W, Town);
+Voice = initVoice(W, Town);
 setMode(mode);
 window.View3D = {
   visible: false,
@@ -1482,6 +1485,7 @@ window.View3D = {
   cart: () => Town?.recall(),
   arena: (args) => Arena?.command(args),
   office: () => openOffices(),
+  voice: (arg) => Voice?.command(arg),
   host: (arg) => { if (arg === 'stop') netSend({ type: 'host.stop' }); else netSend({ type: 'host.start' }); },
   render(now, dt) {
     watchSpeed();
@@ -1493,6 +1497,7 @@ window.View3D = {
     Game?.update(now, dt);
     Town?.update(now, dt);
     Arena?.update(now, dt);
+    Voice?.update(now, dt);
     roof.visible = walkOutside();
     frontWall.visible = mode === 'walk';
     if (mode === 'walk' && me.fig) placeWalkCamera();

@@ -1,5 +1,6 @@
 // One headless Edge, several pages (each with its own cookies), driven over the DevTools protocol.
-// Usage: node drive.mjs <scenario.mjs>     (GPU=1 uses the real graphics card instead of software WebGL)
+// Usage: node drive.mjs <scenario.mjs>     (GPU=1 uses the real graphics card instead of software WebGL; VOICE=1 gives the
+// pages a fake microphone, for voice.scenario.mjs)
 // A scenario is `export default async ({ page, sleep, token, SP }) => {...}`; page(name, url) gives
 // { ev(js), shot(file), key(k), hold(k, ms), mouse(x, y, 'left'|'right'), nav(url), log(text) }.
 // Screenshots land in SP/shots (SP = env SHOTS_DIR or %TEMP%/warroom-test). See play.scenario.mjs.
@@ -11,7 +12,7 @@ fs.mkdirSync(`${SP}/shots`, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const port = 9300 + Math.floor(Math.random() * 500);
 const dir = `${process.env.TEMP}/ac-drv-${port}`;
-const edge = spawn('C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', ['--headless=new', ...(process.env.GPU ? ['--use-angle=d3d11', '--ignore-gpu-blocklist', '--enable-gpu'] : ['--use-angle=swiftshader', '--enable-unsafe-swiftshader']), '--window-size=1500,900', `--user-data-dir=${dir}`, `--remote-debugging-port=${port}`, 'about:blank'], { stdio: 'ignore' });
+const edge = spawn('C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', ['--headless=new', ...(process.env.VOICE ? ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'] : []), ...(process.env.GPU ? ['--use-angle=d3d11', '--ignore-gpu-blocklist', '--enable-gpu'] : ['--use-angle=swiftshader', '--enable-unsafe-swiftshader']), '--window-size=1500,900', `--user-data-dir=${dir}`, `--remote-debugging-port=${port}`, 'about:blank'], { stdio: 'ignore' });
 const kill = () => { try { execSync('taskkill /PID ' + edge.pid + ' /T /F', { stdio: 'ignore' }); } catch { edge.kill(); } };
 process.on('exit', kill);
 let ver;

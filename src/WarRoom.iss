@@ -2,7 +2,7 @@
 ; Per-user install (no admin rights): %LOCALAPPDATA%\WarRoom. Bundles Node, Git (MinGit), the
 ; Foreman and the studio app; the window is Microsoft Edge in app mode (already on Windows 10/11).
 
-#define AppVersion "0.2.0"
+#define AppVersion "0.3.0"
 
 [Setup]
 ; a new AppId: War Room is a separate product from the old Minecraft-based AgentCraft build
@@ -28,7 +28,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=force
 
 [Messages]
-WelcomeLabel2=This installs War Room: a team of Claude agents working on your code, in a studio you can walk around, next to your coworkers' studios on the office network.%n%nStart with the free demo team, or use your own Anthropic API key for real work.
+WelcomeLabel2=This installs War Room: a team of Claude agents working on your code, in a studio you can walk around, next to your coworkers' studios on the office network.%n%nStart with the free demo team, or put Claude agents to real work with your own Claude sign-in or API key. It also has the arena: a team game about writing rules for agents.
 
 [Files]
 Source: "..\stage\WarRoom\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
