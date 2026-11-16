@@ -4,7 +4,7 @@ import * as THREE from './vendor/three.module.min.js';
 import { initGame } from './game.js';
 import { initTown } from './town.js';
 import { initArena } from './arena.js';
-let Town = null, Arena = null;   // shared campus things (board, cart, cells, nearby talk) and the agent arena
+let Town = null, Arena = null, Voice = null;   // shared campus things (board, cart, cells, nearby talk) and the agent arena
 let Game = null;                 // the play layer (blocks, backpack, bugs): see game.js
 
 const AC = window.AC;
@@ -112,7 +112,8 @@ const clickables = [];
 const colliders = [];   // {x0, x1, z0, z1, g}: the avatar cannot walk through these (while g is shown)
 const occluders = [];   // walls and roof: the walk camera stays on the avatar's side of them
 let BUILD = { parent: null, lot: null };   // where box() puts things while an office is being built
-function shown(o) { for (; o; o = o.parent) if (!o.visible) return false; return true; }
+// (a far office that is only hidden to save drawing still stands: its walls keep stopping whoever walks there)
+function shown(o) { for (; o; o = o.parent) if (!o.visible && !o.userData.culled) return false; return true; }
 function box(w, h, d, material, x, y, z, opts = {}) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
   m.position.set(x, y, z);
@@ -158,7 +159,23 @@ function lotGroup(L) {
 }
 const MYLOT = makeLot(0, false);
 const LOTS = [];
-for (const c of [0, 1, -1, 2, -2, 3, -3]) for (const s of [false, true]) if (c || s) LOTS.push(makeLot(c, s));
+for (const c of [0, 1, -1, 2, -2]) for (const s of [false, true]) if (c || s) LOTS.push(makeLot(c, s));
+const ALL_LOTS = [MYLOT, ...LOTS];               // the play layer keeps this list: lots made later are added to it
+
+// Offices: a building belongs to a group of people, not to one person. Everybody tells the others which office
+// they are in (the "of" message); an office exists while somebody is in it. Until you have picked one you stay in
+// a private office that nobody else sees.
+const OFFICE_ID = /^[a-z0-9]{6,12}$/;
+const newOfficeId = () => Math.random().toString(36).slice(2, 10).padEnd(8, '0');
+const office = (() => {
+  try {
+    const o = JSON.parse(localStorage.getItem('wr-office'));
+    if (o && OFFICE_ID.test(o.id)) return { id: o.id, name: String(o.name ?? '').slice(0, 24), born: Number(o.born) || Date.now(), slot: Math.max(0, Math.min(63, o.slot | 0)), ok: !!o.ok };
+  } catch { /* first run, or a private window */ }
+  return { id: newOfficeId(), name: '', born: Date.now(), slot: 0, ok: false };
+})();
+const saveOffice = () => { try { localStorage.setItem('wr-office', JSON.stringify(office)); } catch { /* private window */ } };
+const offices = new Map();                       // id -> { id, name, born, slot, members: [player ids], lot, O }
 
 const plaster = (rx, ry) => mat({ map: tex('plaster_panel', rx, ry) });
 const roofMat = mat({ color: '#5a3e2b' });
@@ -342,8 +359,8 @@ function noiseTexture(base, spots, size = 32, repeat = 1) {
 }
 const stone = (rx, ry) => { const t = noiseTexture('#a49d92', ['#958e83', '#b1aa9f', '#8a847a'], 32, 1); t.repeat.set(rx, ry); return mat({ map: t }); };
 const pathMat = stone(1, 2);
-plane(500, 500, mat({ map: noiseTexture('#6f9a4f', ['#668f48', '#7aa658', '#5f8742', '#82ad5f'], 32, 250) }), 16, -0.02, 20, scene);
-plane(500, 4, stone(125, 1), 16, -0.005, 26, scene);
+plane(1300, 1300, mat({ map: noiseTexture('#6f9a4f', ['#668f48', '#7aa658', '#5f8742', '#82ad5f'], 32, 650) }), 16, -0.02, 20, scene);
+plane(1300, 4, stone(325, 1), 16, -0.005, 26, scene);
 
 const bark = mat({ color: '#6b4a33' }), crown = mat({ color: '#4f7d3d' }), crown2 = mat({ color: '#5f9147' });
 function tree(x, z, s = 1) {
@@ -362,7 +379,7 @@ const plotSignCanvas = document.createElement('canvas'); plotSignCanvas.width = 
 const plotSignTex = new THREE.CanvasTexture(plotSignCanvas); plotSignTex.colorSpace = THREE.SRGBColorSpace;
 // around every lot: trees, benches and street lamps (the far lots only show once someone lives there)
 const freeMat = mat({ color: '#8a7a5c' }), plotSignMat = mat({ map: plotSignTex });
-for (const L of [MYLOT, ...LOTS]) {
+function decorate(L) {
   L.deco = lotGroup(L);
   const prev = BUILD; BUILD = { parent: L.deco, lot: L };
   tree(-3.4, 4, 1.1); tree(-3.8, 15, 0.9);
@@ -378,6 +395,13 @@ for (const L of [MYLOT, ...LOTS]) {
     L.deco.visible = Math.abs(L.col) <= 1;
   }
   BUILD = prev;
+}
+for (const L of ALL_LOTS) decorate(L);
+// the campus grows along the road: a lot is made the first time an office needs it
+function lotAt(col, south) {
+  let L = LOTS.find((l) => l.col === col && l.south === south);
+  if (!L) { L = makeLot(col, south); decorate(L); LOTS.push(L); ALL_LOTS.push(L); }
+  return L;
 }
 
 // lights: soft ambient + a sun that follows you (its shadows cover the area around you)
@@ -395,6 +419,8 @@ scene.add(sun, sun.target);
 const MY = buildOffice(MYLOT, true);
 const { deskScreens, roof, frontWall, cardGroup, bellMat, podiumLight } = MY;
 const paintSign = MY.paintSign;
+const myOfficeName = () => office.name || (me.look?.name?.trim() ? `${me.look.name.trim()}'s office` : 'My office');
+function paintMySign() { const s = me.look ? myOfficeName() : 'War Room'; if (MY.signText !== s) { MY.signText = s; paintSign(s); } }
 MY.onBoard = () => AC.focusTasks();
 MY.onLibrary = () => AC.openLibrary();
 MY.onPodium = () => { const d = AC.firstOpenDecision(); if (d) AC.openDecision(d.id); else AC.toast('Nothing is waiting for you.'); };
@@ -515,9 +541,11 @@ function updateFigures(now, dt) {
   }
 }
 
+let mateOwners = new Map();     // desks of your office taken by the agents of the people you share it with
 function updateDesks() {
   const owners = new Map();
   for (const [id, k] of deskOf) { const a = S.agents.get(id); if (a) owners.set(k, a); }
+  for (const [k, a] of mateOwners) if (!owners.has(k)) owners.set(k, a);
   dressOffice(MY, owners, [...S.decisions.values()].filter((x) => x.status === 'open').length, performance.now());
 }
 
@@ -592,13 +620,12 @@ if (location.hash.startsWith('#walk')) {   // screenshots: a look without saving
 }
 function buildAvatar() {
   if (me.fig) scene.remove(me.fig.root);
-  if (!me.look) { me.fig = null; paintSign('War Room'); return; }
+  if (!me.look) { me.fig = null; paintMySign(); return; }
   const t = new THREE.CanvasTexture(paintSkin(me.look));
   t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter; t.colorSpace = THREE.SRGBColorSpace;
   me.fig = buildFigure({}, { base: mat({ map: t, alphaTest: 0.5 }), over: mat({ map: t, alphaTest: 0.5 }) });
   me.fig.rot = me.rot;
-  const n = me.look.name.trim();
-  paintSign(n ? `${n}'s office` : 'My office');
+  paintMySign();
 }
 buildAvatar();
 
@@ -795,7 +822,7 @@ el.addEventListener('pointermove', (e) => {
     const fx = Math.cos(orbit.az), fz = -Math.sin(orbit.az);
     orbit.target.x -= (dx * fx + dy * Math.sin(orbit.az)) * k;
     orbit.target.z -= (dx * fz + dy * Math.cos(orbit.az)) * k;
-    orbit.target.x = Math.max(-150, Math.min(190, orbit.target.x)); orbit.target.z = Math.max(-10, Math.min(62, orbit.target.z));
+    orbit.target.x = Math.max(-560, Math.min(600, orbit.target.x)); orbit.target.z = Math.max(-10, Math.min(62, orbit.target.z));
   } else {
     orbit.az -= dx * 0.006;
     orbit.polar = Math.max(0.25, Math.min(1.35, orbit.polar - dy * 0.005));
@@ -863,21 +890,21 @@ function placeMyPlate() {
 const net = { ws: null, self: null, lastPos: '', lastSent: 0 };
 const peersV = new Map();                         // id -> a coworker on the campus
 const norm = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-// A place on the wire is written in the frame of the nearest office (whose owner everybody knows), so it means
+// A place on the wire is written in the frame of the nearest office (everybody knows the offices), so it means
 // the same spot in every window although each window draws the campus around its own office.
 function toWire(x, z, rot = 0) {
-  let L = MYLOT, id = net.self?.id ?? '', best = Math.hypot(x - 16, z - 10);
-  for (const p of peersV.values()) {
-    if (!p.lot) continue;
-    const [cx, cz] = p.lot.w(16, 10), dd = Math.hypot(x - cx, z - cz);
-    if (dd < best) { best = dd; L = p.lot; id = p.id; }
+  let L = MYLOT, id = office.id, best = Math.hypot(x - 16, z - 10);
+  for (const g of offices.values()) {
+    if (g.lot === MYLOT) continue;
+    const [cx, cz] = g.lot.w(16, 10), dd = Math.hypot(x - cx, z - cz);
+    if (dd < best) { best = dd; L = g.lot; id = g.id; }
   }
   const [dx, dz] = L.l(x, z);
   return { anchor: id, dx: +dx.toFixed(2), dz: +dz.toFixed(2), rot: +norm(rot - L.rot).toFixed(2) };
 }
 function fromWire(w) {
   if (!w || typeof w !== 'object' || !w.anchor) return null;
-  const L = w.anchor === net.self?.id ? MYLOT : peersV.get(w.anchor)?.lot;
+  const L = w.anchor === office.id ? MYLOT : offices.get(w.anchor)?.lot;
   if (!L || !Number.isFinite(w.dx) || !Number.isFinite(w.dz)) return null;
   const [x, z] = L.w(Math.max(-200, Math.min(200, w.dx)), Math.max(-200, Math.min(200, w.dz)));
   return { x, z, rot: (Number.isFinite(w.rot) ? w.rot : 0) + L.rot };
@@ -900,7 +927,7 @@ function sendMe() { netSend({ type: 'me', name: me.look?.name || S.foreman?.user
 
 function onNet(m) {
   switch (m.type) {
-    case 'self': net.self = m; assignLots(); updatePeerChip(); break;
+    case 'self': { const was = net.self?.session?.mode; net.self = m; assignLots(); updatePeerChip(); if (was !== m.session?.mode) { sendOffice(); Arena?.onSession?.(); } break; }
     case 'peer.join': upsertPeer(m.peer); break;
     case 'peer.presence': { const p = peersV.get(m.id); if (p) { p.name = m.name; p.look = m.look; refreshPeerLook(p); } break; }
     case 'peer.office': { const p = peersV.get(m.id); if (p) p.office = m.office; break; }
@@ -912,10 +939,16 @@ function onNet(m) {
       AC.toast(`${m.name}: ${m.text}`);
       break;
     }
-    case 'peer.g': { const p = peersV.get(m.id); if (p && m.d && typeof m.d === 'object' && typeof m.k === 'string') { Town?.onGame(p, m.k, m.d); Arena?.onGame(p, m.k, m.d); } break; }
+    case 'peer.g': {
+      const p = peersV.get(m.id);
+      if (!p || !m.d || typeof m.d !== 'object' || typeof m.k !== 'string') break;
+      if (m.k === 'of' || m.k === 'of.move') onOfficeMsg(p, m.k, m.d);
+      else { Town?.onGame(p, m.k, m.d); Arena?.onGame(p, m.k, m.d); Voice?.onGame(p, m.k, m.d); }
+      break;
+    }
     case 'peer.gone': dropPeer(m.id); break;
     case 'brain.status': case 'brain.result': Arena?.onBrain(m); break;
-    case 'notice': AC.toast(m.text, 'warn'); break;
+    case 'notice': AC.toast(m.text, m.tone === 'ok' ? undefined : 'warn'); break;
   }
 }
 
@@ -923,46 +956,165 @@ function upsertPeer(v) {
   let p = peersV.get(v.id);
   const fresh = !p;
   if (!p) {
-    p = { id: v.id, lot: null, O: null, agents: new Map(), avatar: null, chat: null, dom: null };
+    p = { id: v.id, lot: null, O: null, of: null, agents: new Map(), avatar: null, chat: null, dom: null };
     peersV.set(v.id, p);
-    AC.toast(`${v.name || 'A coworker'} is on the campus.`);
+    if (peersV.size <= 6) AC.toast(`${v.name || 'A coworker'} is on the campus.`);
     AC.addFeed({ ts: Date.now(), kind: 'system', text: `${v.name || 'A coworker'} joined the campus` });
   }
   Object.assign(p, { name: v.name, look: v.look, office: v.office, pos: v.pos, addr: v.addr });
   assignLots();
   refreshPeerLook(p);
   updatePeerChip();
-  if (fresh) { Town?.onJoin(p); Arena?.onJoin(p); }
+  if (fresh) { sendOffice(p.id); Town?.onJoin(p); Arena?.onJoin(p); Voice?.onJoin(p); }
 }
-// Everyone orders the campus the same way: players sorted by id take the lots in pairs across the road. Each
-// window then shows that same campus, moved (and, if your own lot is a south one, turned around) so that your
-// office is the one at the origin. That keeps distances and neighbours the same for everybody.
+
+// ---- offices ----
+const officeName = (oid) => (oid === office.id ? myOfficeName() : offices.get(oid)?.name ?? 'an office');
+const officeOf = (pid) => (pid === net.self?.id ? (office.ok ? office.id : '') : peersV.get(pid)?.of?.ok ? peersV.get(pid).of.id : '');
+const membersOf = (oid) => offices.get(oid)?.members ?? [];
+// one member answers for the things an office shares (its cell doors): the one with the lowest id who is here
+const keeperOf = (L) => (L === MYLOT ? offices.get(office.id)?.members[0] ?? net.self?.id ?? '' : offices.get(L.owner)?.members[0] ?? '');
+const hostId = () => net.self?.session?.host?.id ?? '';
+const iAmHost = () => net.self?.session?.mode === 'host';
+const cleanName = (v, n = 24) => String(v ?? '').replace(/[\u0000-\u001f]/g, ' ').slice(0, n).trim();
+let officeSentAt = 0;
+function sendOffice(to) {
+  officeSentAt = performance.now();
+  if (!net.self) return;
+  const m = { type: 'g', k: 'of', d: { id: office.id, name: myOfficeName(), born: office.born, slot: office.slot, ok: office.ok } };
+  if (typeof to === 'string') m.to = [to];
+  netSend(m);
+}
+function onOfficeMsg(p, k, d) {
+  const id = String(d.id ?? ''), born = Number(d.born);
+  if (!OFFICE_ID.test(id) || !Number.isFinite(born)) return;
+  const of = { id, name: cleanName(d.name), born, slot: Math.max(0, Math.min(63, d.slot | 0)), ok: !!d.ok };
+  if (k === 'of') {
+    const was = p.of;
+    p.of = of;
+    if (!was || was.id !== of.id || was.ok !== of.ok || was.slot !== of.slot || was.name !== of.name || was.born !== of.born) assignLots();
+  } else if (k === 'of.move') {                   // the organiser of the session puts you in an office
+    if (p.id !== hostId() || Arena?.inMatch?.()) return;
+    setOffice({ ...of, name: of.name || 'Office' });
+    AC.toast(`${p.name} moved you to ${myOfficeName()}.`);
+  }
+}
+// Everyone lays the campus out the same way. Every office claims a place number; if two claim the same one, the
+// older office keeps it and the other takes the first free number. Number 0 is the middle of the road, the rest
+// alternate left and right, both sides of the road. Each window then shows that campus moved (and, if your own
+// office is on the south side, turned around) so that your office is the one at the origin.
+const placeOfSlot = (s) => { const k = s >> 1; return [k === 0 ? 0 : k % 2 ? (k + 1) / 2 : -k / 2, s & 1]; };
+let officesKey = '';
 function assignLots() {
   if (!net.self) return;
-  const ids = [net.self.id, ...peersV.keys()].sort();
-  const r0 = ids.indexOf(net.self.id), c0 = r0 >> 1, s0 = r0 & 1;
-  const moves = [];
-  for (const p of peersV.values()) {
-    const r = ids.indexOf(p.id), c = r >> 1, s = r & 1;
-    const col = s0 ? c0 - c : c - c0, south = s0 ? !s : !!s;
-    const L = LOTS.find((l) => l.col === col && l.south === south) ?? null;      // null: the campus is full
-    if (L !== p.lot) moves.push([p, L]);
+  const groups = new Map();
+  const add = (pid, of) => { let g = groups.get(of.id); if (!g) groups.set(of.id, g = { id: of.id, members: [], claims: [] }); g.members.push(pid); g.claims.push([pid, of]); };
+  add(net.self.id, office);
+  for (const p of peersV.values()) if (p.of?.ok && (office.ok || p.of.id !== office.id)) add(p.id, p.of);
+  for (const g of groups.values()) {
+    g.members.sort();
+    const f = g.claims.sort((a, b) => a[1].born - b[1].born || (a[0] < b[0] ? -1 : 1))[0][1];
+    g.name = f.name || 'Office'; g.born = f.born; g.want = f.slot;
   }
-  for (const [p] of moves) if (p.lot) { p.O.G.visible = false; p.lot.owner = null; p.lot = null; p.O = null; }
-  for (const [p, L] of moves) {
-    if (!L) continue;
+  const hiddenOne = (g) => (g.id === office.id && !office.ok ? 1 : 0);
+  const order = [...groups.values()].sort((a, b) => hiddenOne(a) - hiddenOne(b) || a.born - b.born || (a.id < b.id ? -1 : 1));
+  const taken = new Set();
+  for (const g of order) { let s = g.want; if (!(s >= 0 && s < 64) || taken.has(s)) { s = 0; while (taken.has(s)) s++; } taken.add(s); g.slot = s; }
+  const mineG = groups.get(office.id), [c0, s0] = placeOfSlot(mineG.slot);
+  if (office.ok && (office.slot !== mineG.slot || office.born !== mineG.born || (mineG.name && office.name !== mineG.name && mineG.members.length > 1))) {
+    office.slot = mineG.slot; office.born = mineG.born; if (mineG.members.length > 1) office.name = mineG.name;
+    saveOffice();
+  }
+  mineG.name = myOfficeName();
+  const used = new Set(), fresh = [];
+  for (const g of groups.values()) {
+    if (g === mineG) { g.lot = MYLOT; g.O = MY; continue; }
+    const [c, s] = placeOfSlot(g.slot);
+    const L = lotAt(s0 ? c0 - c : c - c0, s0 ? !s : !!s);
     const O = (L.office ??= buildOffice(L, false));
-    O.G.visible = true; O.cardKey = '';
-    L.owner = p.id; p.lot = L; p.O = O;
-    O.onPodium = () => AC.toast(`Only ${p.name} can answer their team's questions.`);
-    O.onMerge = O.onPodium;
-    O.onLibrary = () => AC.toast(`${p.name}'s library stays private.`);
-    O.onBoard = () => openPeerTasks(p);
-    O.paintSign(`${p.name || 'Coworker'}'s office`);
-    L.deco.visible = true;
-    Town?.dressLot(L);
+    if (L.owner !== g.id) {
+      O.G.visible = true; O.G.userData.culled = false; O.cardKey = ''; O.signText = '';
+      L.owner = g.id; L.deco.visible = true;
+      O.onPodium = () => AC.toast(`Only the people of ${officeName(L.owner)} can answer their teams' questions.`);
+      O.onMerge = O.onPodium;
+      O.onLibrary = () => AC.toast(`The library of ${officeName(L.owner)} stays private.`);
+      O.onBoard = () => openOfficeTasks(L.owner);
+      fresh.push(L);
+    }
+    if (O.signText !== g.name) { O.paintSign(g.name); O.signText = g.name; }
+    g.lot = L; g.O = O; used.add(L);
   }
+  for (const L of LOTS) if (L.owner && !used.has(L)) { L.office.G.visible = false; L.office.G.userData.culled = false; L.owner = null; }
+  offices.clear();
+  for (const g of groups.values()) offices.set(g.id, g);
+  for (const p of peersV.values()) { const g = p.of?.ok ? groups.get(p.of.id) : null; p.lot = g?.lot ?? null; p.O = g?.O ?? null; }
   for (const L of LOTS) { L.free.visible = !L.owner; L.deco.visible = !!L.owner || Math.abs(L.col) <= 1; }
+  for (const L of fresh) Town?.dressLot(L);
+  paintMySign();
+  const key = [...groups.values()].map((g) => `${g.id}:${g.slot}:${g.name}:${g.members.join('.')}`).sort().join('|');
+  if (key !== officesKey) { officesKey = key; Town?.dressLot(MYLOT); Arena?.onOffices?.(); if (AC.modalKind() === 'offices') openOffices(true); }
+}
+function canSwitch() {
+  if (Arena?.inMatch?.()) { AC.toast('Not during a match.', 'warn'); return false; }
+  if (Arena?.locked?.() && !iAmHost()) { AC.toast('The organiser has locked the offices for now.', 'warn'); return false; }
+  return true;
+}
+function setOffice(of) {
+  const moved = of.id !== office.id || !office.ok;
+  Object.assign(office, { id: of.id, name: of.name, born: of.born, slot: of.slot, ok: true });
+  saveOffice();
+  assignLots();
+  sendOffice();
+  if (moved) { me.x = 16; me.z = 23.6; me.y = 0; Town?.moved(); Arena?.onOffices?.(); }
+}
+function freeSlot() {
+  const used = new Set([...offices.values()].filter((g) => g.id !== office.id || office.ok).map((g) => g.slot));
+  let slot = 0; while (used.has(slot)) slot++;
+  return slot;
+}
+function createOffice(name) {
+  setOffice({ id: newOfficeId(), name: cleanName(name) || (me.look?.name?.trim() ? `${me.look.name.trim()}'s office` : 'New office'), born: Date.now(), slot: freeSlot() });
+}
+function joinOffice(oid) { const g = offices.get(oid); if (g) setOffice({ id: g.id, name: g.name, born: g.born, slot: g.slot }); }
+function openOffices(refresh) {
+  const myId = net.self?.id ?? '', host = iAmHost();
+  const who = (pid) => (pid === myId ? me.look?.name || 'You' : peersV.get(pid)?.name ?? 'Someone');
+  const list = [...offices.values()].filter((g) => g.id !== office.id || office.ok).sort((a, b) => a.name.localeCompare(b.name));
+  const homeless = [...peersV.values()].filter((p) => !p.of?.ok);
+  const typed = refresh ? document.getElementById('of-name')?.value : '';
+  const mover = (pid) => (host && pid !== myId ? ` <select data-move="${pid}"><option value="">move to...</option>${list.map((g) => `<option value="${g.id}">${AC.esc(g.name)}</option>`).join('')}<option value="+">a new office</option></select>` : '');
+  AC.modal('offices', '', `
+    <div class="m-head"><h1>Offices <span class="sub">a team shares one building</span></h1><button class="x" data-close aria-label="Close">&times;</button></div>
+    <div class="m-body offices">
+      <p>${office.ok ? `You are in <b>${AC.esc(myOfficeName())}</b>.` : '<b>Pick an office to appear on the campus.</b> Until you do, the others cannot see you.'}</p>
+      ${list.length ? `<ul class="peers">${list.map((g) => `<li><b>${AC.esc(g.name)}</b> <span class="muted">${g.members.length} ${g.members.length === 1 ? 'person' : 'people'}</span> ${g.id === office.id && office.ok ? '<span class="muted">(yours)</span>' : `<button class="quiet" data-join="${g.id}">Join</button>`}
+        <div class="muted">${g.members.map((pid) => AC.esc(who(pid)) + mover(pid)).join(', ')}</div></li>`).join('')}</ul>` : '<p class="muted">No offices yet. Create the first one.</p>'}
+      ${homeless.length ? `<p class="muted">Still choosing: ${homeless.map((p) => AC.esc(p.name || 'Someone') + mover(p.id)).join(', ')}</p>` : ''}
+      <h3>Create a new office</h3>
+      <div class="row"><input type="text" id="of-name" maxlength="24" placeholder="Office name, e.g. Payments team"><button id="of-create">Create and move in</button></div>
+      <p class="muted">The desks, announcement board, holding cells and arena squad belong to the office you are in. You can change office when no match is on.${host ? ' As the host you can move people with the lists next to their names.' : ''}</p>
+    </div>`);
+  const input = document.getElementById('of-name');
+  if (typed) input.value = typed;
+  const create = () => { if (!canSwitch()) return; createOffice(input.value); AC.closeModal(); AC.toast(`You are in ${myOfficeName()}.`); };
+  document.getElementById('of-create').onclick = create;
+  input.onkeydown = (e) => { if (e.key === 'Enter') create(); };
+  for (const b of document.querySelectorAll('[data-join]')) b.onclick = () => { if (!canSwitch()) return; joinOffice(b.dataset.join); AC.closeModal(); AC.toast(`You are in ${myOfficeName()}.`); };
+  for (const sel of document.querySelectorAll('[data-move]')) sel.onchange = () => {
+    const p = peersV.get(sel.dataset.move), g = offices.get(sel.value);
+    if (!p || !sel.value) return;
+    const of = g ? { id: g.id, name: g.name, born: g.born, slot: g.slot } : { id: newOfficeId(), name: `${p.name || 'New'}'s office`.slice(0, 24), born: Date.now(), slot: freeSlot() };
+    netSend({ type: 'g', k: 'of.move', to: [p.id], d: of });
+    AC.toast(`Asked ${p.name} to move to ${of.name}.`);
+  };
+}
+// the first time there are other people around: ask which office
+let officeAsked = false, remindAt = 0;
+function officeTick(now) {
+  if (!net.self) return;
+  if (office.ok || !peersV.size || !me.look || !window.View3D?.visible || AC.isModalOpen()) return;
+  if (!officeAsked) { officeAsked = true; openOffices(); }
+  else if (now - remindAt > 45000) { remindAt = now; AC.toast('Pick an office (the Office button) so the others can see you.', 'warn'); }
 }
 function dropPeer(id, quiet) {
   const p = peersV.get(id);
@@ -970,15 +1122,13 @@ function dropPeer(id, quiet) {
   if (p.avatar) scene.remove(p.avatar.fig.root);
   for (const g of p.agents.values()) { scene.remove(g.fig.root); g.plate?.remove(); }
   p.dom?.plate.remove(); p.dom?.say.remove();
-  if (p.lot) { p.O.G.visible = false; p.lot.owner = null; p.lot = null; p.O = null; }
-  Town?.onLeave(p); Arena?.onLeave(p);
+  Town?.onLeave(p); Arena?.onLeave(p); Voice?.onLeave(p);
   peersV.delete(id);
   assignLots();
-  if (!quiet) { AC.toast(`${p.name} left the campus.`); AC.addFeed({ ts: Date.now(), kind: 'system', text: `${p.name} left the campus` }); }
+  if (!quiet) { if (peersV.size < 6) AC.toast(`${p.name} left the campus.`); AC.addFeed({ ts: Date.now(), kind: 'system', text: `${p.name} left the campus` }); }
   updatePeerChip();
 }
 function refreshPeerLook(p) {
-  p.O?.paintSign(`${p.name || 'Coworker'}'s office`);
   const key = JSON.stringify(p.look);
   if (p.avatar && p.avatar.key === key) return;
   if (p.avatar) scene.remove(p.avatar.fig.root);
@@ -1004,28 +1154,34 @@ function placePeerAvatar(p, now, dt) {
   Town?.peerPose(p, av);
 }
 
-// a coworker's agents, walking their own office from the activity summary
-function placePeerAgents(p, now, dt) {
+// a coworker's agents, walking their office from the activity summary. The desks and standing places of an office
+// are shared by everybody who works there (ctx): first come, by player id, first seated.
+function placePeerAgents(p, now, dt, ctx) {
   const list = p.office?.agents ?? [];
+  if (ctx.far) {                                  // too far to see: nothing to move or draw
+    for (const g of p.agents.values()) { g.fig.root.visible = false; g.head = null; }
+    return;
+  }
   const deskIdx = new Map();
-  let next = 1;
-  for (const a of list) if (a.role === 'lead' && !deskIdx.has(a.id) && ![...deskIdx.values()].includes(0)) deskIdx.set(a.id, 0);
-  for (const a of list) if (!deskIdx.has(a.id)) deskIdx.set(a.id, Math.min(next++, DESKS.length - 1));
-  const at = new Map();
-  for (const a of list) { const st = a.active ? a.station : 'lounge'; if (!at.has(st)) at.set(st, []); at.get(st).push(a.id); }
-  for (const ids of at.values()) ids.sort();
+  let lead = false;
+  for (const a of list) if (a.role === 'lead' && !lead && ctx.free.has(0)) { lead = true; deskIdx.set(a.id, 0); ctx.free.delete(0); }
+  for (const a of list) if (!deskIdx.has(a.id)) { const k = [...ctx.free].find((i) => i > 0) ?? -1; deskIdx.set(a.id, k); if (k > 0) ctx.free.delete(k); }
+  const stOf = (a) => (!a.active ? 'lounge' : a.station === 'desk' && deskIdx.get(a.id) < 0 ? 'meeting' : a.station);
+  const at = new Map(), base = new Map();
+  for (const a of list) { const st = stOf(a); if (!at.has(st)) at.set(st, []); at.get(st).push(a.id); }
+  for (const [st, ids] of at) { ids.sort(); base.set(st, ctx.spots.get(st) ?? 0); ctx.spots.set(st, base.get(st) + ids.length); }
   const keep = new Set();
   const t = now / 1000;
-  const owners = new Map();
+  const owners = ctx.owners;
   for (const a of list) {
     keep.add(a.id);
     let g = p.agents.get(a.id);
     if (!g || g.skin !== a.skin) { if (g) scene.remove(g.fig.root); g = { fig: buildFigure({}, skinMaterials(a.skin)), skin: a.skin, x: null, y: null, rot: 0, heading: 0 }; p.agents.set(a.id, g); }
-    g.a = a;
-    const st = a.active ? a.station : 'lounge';
+    g.a = a; g.fig.root.visible = true;
+    const st = stOf(a);
     let tx, ty, seated;
     if (st === 'desk') { const k = deskIdx.get(a.id); const d = DESKS[k]; tx = d.x + 1.5; ty = d.y + 2.05; seated = true; owners.set(k, a); }
-    else { const spots = SPOTS[st] ?? SPOTS.lounge; [tx, ty] = spots[at.get(st).indexOf(a.id) % spots.length]; seated = st === 'meeting' || st === 'lounge'; }
+    else { const spots = SPOTS[st] ?? SPOTS.lounge; [tx, ty] = spots[(base.get(st) + at.get(st).indexOf(a.id)) % spots.length]; seated = st === 'meeting' || st === 'lounge'; }
     if (g.x === null) { g.x = tx; g.y = ty; }
     const dx = tx - g.x, dy = ty - g.y, dist = Math.hypot(dx, dy);
     const moving = dist > 0.05;
@@ -1048,9 +1204,8 @@ function placePeerAgents(p, now, dt) {
     g.head = [f.root.position.x, f.root.position.y + 34 * PX + 0.15, f.root.position.z];
   }
   for (const [id, g] of p.agents) if (!keep.has(id)) { scene.remove(g.fig.root); g.plate?.remove(); p.agents.delete(id); }
-  // their office: screens, plaques, the podium lamp, the task board
-  dressOffice(p.O, owners, p.office?.open ?? 0, now);
-  fillCards(p.O, p.office?.tasks ?? []);
+  ctx.open += p.office?.open ?? 0;
+  for (const t of p.office?.tasks ?? []) if (ctx.tasks.length < 40) ctx.tasks.push(t);
 }
 const insidePeer = (p) => mode === 'walk' && !!p.lot?.inside(me.x, me.z);
 
@@ -1093,8 +1248,8 @@ function peerPlates() {
   }
 }
 function insideAt(x, z) {
-  if (MYLOT.inside(x, z)) return 'in your office';
-  for (const q of peersV.values()) if (q.lot?.inside(x, z)) return `in ${q.name}'s office`;
+  if (MYLOT.inside(x, z)) return office.ok ? `in ${myOfficeName()}` : 'in your office';
+  for (const g of offices.values()) if (g.lot !== MYLOT && g.lot.inside(x, z)) return `in ${g.name}`;
   return Town?.where(x, z) ?? 'on the campus';
 }
 
@@ -1121,6 +1276,18 @@ function openPeerTasks(p) {
     </div>`);
 }
 
+// an office shared by several people: who is working on what
+function openOfficeTasks(oid) {
+  const g = offices.get(oid);
+  if (!g) return;
+  const ps = g.members.map((id) => peersV.get(id)).filter(Boolean);
+  if (ps.length === 1) return openPeerTasks(ps[0]);
+  AC.modal('office-tasks', oid, `
+    <div class="m-head"><h1>${AC.esc(g.name)} <span class="sub">${ps.length} people</span></h1><button class="x" data-close aria-label="Close">&times;</button></div>
+    <div class="m-body"><ul class="peers">${ps.map((p) => `<li><b>${AC.esc(p.name)}</b> <span class="muted">${p.office?.goal ? `${AC.esc(p.office.goal.text)} (${Math.round(p.office.goal.progress * 100)}%)` : 'no goal right now'}</span> <a href="#" data-wall="${p.id}">task wall</a></li>`).join('')}</ul></div>`);
+  for (const a of document.querySelectorAll('[data-wall]')) a.onclick = (e) => { e.preventDefault(); const p = peersV.get(a.dataset.wall); if (p) openPeerTasks(p); };
+}
+
 // "E" near coworkers' things
 function peerNear(offer) {
   const d = (x, z) => Math.hypot(me.x - x, me.z - z);
@@ -1128,8 +1295,11 @@ function peerNear(offer) {
     if (p.avatar?.shown) offer(d(p.avatar.x, p.avatar.z), 2, `Talk to ${p.name}`, () => { AC.prefill('/say '); });
     if (!p.lot || d(...p.lot.w(16, 10)) > 30) continue;
     for (const g of p.agents.values()) if (g.head) offer(d(g.head[0], g.head[2]), 1.8, `Watch ${g.a.name} (${p.name}'s team)`, () => openPeerAgent(p, g.a));
-    offer(d(...p.lot.w(28.6, 9.25)), 2.3, `${p.name}'s podium`, () => p.O.onPodium());
-    offer(d(...p.lot.w(13.75, 0.6)), 2.6, `Look at ${p.name}'s task wall`, () => openPeerTasks(p));
+  }
+  for (const g of offices.values()) {
+    if (g.lot === MYLOT || d(...g.lot.w(16, 10)) > 30) continue;
+    offer(d(...g.lot.w(28.6, 9.25)), 2.3, `The podium of ${g.name}`, () => g.O.onPodium());
+    offer(d(...g.lot.w(13.75, 0.6)), 2.6, `Look at the task wall of ${g.name}`, () => openOfficeTasks(g.id));
   }
 }
 
@@ -1168,6 +1338,9 @@ function placeMySay() {
 const btnPeers = document.createElement('button'); btnPeers.className = 'ghost';
 header.before(btnPeers);
 btnPeers.onclick = () => renderPeersPanel();
+const btnOffice = document.createElement('button'); btnOffice.className = 'ghost'; btnOffice.textContent = 'Office'; btnOffice.title = 'Which office you are in: join a team or create one';
+header.before(btnOffice);
+btnOffice.onclick = () => openOffices();
 function updatePeerChip() {
   const n = peersV.size;
   btnPeers.innerHTML = `Coworkers <span class="count${n ? ' on' : ''}">${n}</span>`;
@@ -1185,7 +1358,11 @@ function renderPeersPanel(refresh) {
     <div class="m-body">
       <p>${list.length ? `On the campus now:` : 'Nobody else yet. Coworkers running War Room on the same network appear by themselves; if they do not, add them by PC name or address.'}</p>
       ${list.length ? `<ul class="peers">${list.map((p) => `<li><b>${AC.esc(p.name)}</b> <span class="muted">${AC.esc(p.addr ?? '')} &middot; ${AC.esc(p.office?.backend === 'sim' ? 'demo team' : p.office?.backend ?? '')}</span></li>`).join('')}</ul>` : ''}
-      <h3>Add a coworker</h3>
+      <h3>Session</h3>
+      ${s?.session?.mode === 'host' ? `<p><b>You are hosting the session.</b> Everybody on this network who starts War Room joins you by itself. If someone does not appear, they type your address (below) under "Add a coworker or the host". You are also the organiser of arena matches.</p><div class="row"><button class="quiet" id="pp-unhost">Stop hosting</button></div>`
+        : s?.session?.mode === 'member' ? `<p>You are in the session hosted by <b>${AC.esc(s.session.host?.name ?? '?')}</b>. Everything goes through their PC.</p>`
+        : `<p class="muted">For more than a few people, one person hosts: everybody else connects only to that PC, so only the host's PC has to let War Room through its firewall. The host is also the organiser of arena matches.</p><div class="row"><button id="pp-hostbtn">Host a session</button></div>`}
+      <h3>Add a coworker or the host</h3>
       <div class="row"><input type="text" id="pp-host" placeholder="PC name or IP address, e.g. DANA-LAPTOP or 10.0.4.17"><button id="pp-add">Connect</button></div>
       ${s?.hosts?.length ? `<p class="muted">Saved: ${s.hosts.map((h) => `${AC.esc(h)} <a href="#" data-forget="${AC.esc(h)}">forget</a>`).join(' &middot; ')}</p>` : ''}
       <h3>Your address</h3>
@@ -1195,6 +1372,8 @@ function renderPeersPanel(refresh) {
       <div class="row"><input type="password" id="pp-code" value="${AC.esc(s?.code ?? '')}" placeholder="no code"><button class="quiet" id="pp-save">Save code</button></div>
       <p class="muted">Shared with coworkers: your name and avatar, where you walk, chat, and your team's activity (agents' status lines, task titles, progress). Never logs, diffs or code, and nobody else can answer your agents.</p>
     </div>`);
+  document.getElementById('pp-hostbtn')?.addEventListener('click', () => { netSend({ type: 'host.start' }); AC.toast('You are hosting. Tell the others your PC name or address if they do not appear by themselves.'); });
+  document.getElementById('pp-unhost')?.addEventListener('click', () => netSend({ type: 'host.stop' }));
   if (typed?.host) document.getElementById('pp-host').value = typed.host;
   if (typeof typed?.code === 'string') document.getElementById('pp-code').value = typed.code;
   if (typed?.focus === 'pp-host' || typed?.focus === 'pp-code') document.getElementById(typed.focus).focus();
@@ -1207,20 +1386,44 @@ function renderPeersPanel(refresh) {
 netConnect();
 
 function updatePeers(now, dt) {
-  for (const p of peersV.values()) {
-    placePeerAvatar(p, now, dt);
-    if (!p.lot) continue;
-    placePeerAgents(p, now, dt);
-    p.O.roof.visible = !insidePeer(p);
-  }
-  sendPos(now);
   const fx = mode === 'walk' ? me.x : orbit.target.x, fz = mode === 'walk' ? me.z : orbit.target.z;
+  const ctxs = new Map();
+  const ctxOf = (L) => {
+    let c = ctxs.get(L);
+    if (c) return c;
+    const [cx, cz] = L.w(16, 10);
+    c = { free: new Set(DESKS.map((d, k) => k)), owners: new Map(), spots: new Map(), open: 0, tasks: [], far: L !== MYLOT && Math.hypot(cx - fx, cz - fz) > 130 };
+    if (L === MYLOT) {                            // your own agents sit first
+      for (const k of deskOf.values()) c.free.delete(k);
+      for (const a of S.agents.values()) { const st = a.active ? a.station : 'lounge'; c.spots.set(st, (c.spots.get(st) ?? 0) + 1); }
+    }
+    ctxs.set(L, c);
+    return c;
+  };
+  for (const p of [...peersV.values()].sort((a, b) => (a.id < b.id ? -1 : 1))) {
+    placePeerAvatar(p, now, dt);
+    if (!p.lot) { for (const g of p.agents.values()) { g.fig.root.visible = false; g.head = null; } continue; }
+    placePeerAgents(p, now, dt, ctxOf(p.lot));
+  }
+  mateOwners = ctxs.get(MYLOT)?.owners ?? new Map();
+  for (const g of offices.values()) {
+    if (g.lot === MYLOT) continue;
+    const c = ctxOf(g.lot);
+    g.O.G.visible = !c.far; g.O.G.userData.culled = c.far;
+    if (c.far) continue;
+    dressOffice(g.O, c.owners, c.open, now);
+    fillCards(g.O, c.tasks);
+    g.O.roof.visible = !(mode === 'walk' && g.lot.inside(me.x, me.z));
+  }
+  if (now - officeSentAt > 6000) sendOffice();
+  officeTick(now);
+  sendPos(now);
   sun.target.position.set(fx, 0, fz); sun.position.set(fx - 8, 30, fz + 16);
 }
 
 Game = initGame({
   THREE, scene, camera, el, floorEl, overlayEl, me, mat, AC, S, sun, hemi, blocked, busy, toScreen,
-  lots: () => [MYLOT, ...LOTS], extraHit: (dmg) => !!Arena?.playerHit(dmg), getMode: () => mode, isVisible: () => !!window.View3D?.visible,
+  lots: () => ALL_LOTS, extraHit: (dmg) => !!Arena?.playerHit(dmg), getMode: () => mode, isVisible: () => !!window.View3D?.visible,
 });
 const W = {
   THREE, scene, camera, el, floorEl, overlayEl, me, cam, mat, M, AC, S, box, plane, colliders, blocked, busy, toScreen, toWire, fromWire, netSend,
@@ -1228,9 +1431,11 @@ const W = {
   build: (L, parent, fn) => { const prev = BUILD; BUILD = { parent, lot: L }; try { return fn(); } finally { BUILD = prev; } },
   bubble: (text) => { myChat = { text, until: Date.now() + 8000 }; },
   getMode: () => mode, isVisible: () => !!window.View3D?.visible, myId: () => net.self?.id ?? '', myName: () => me.look?.name || 'You', game: () => Game,
+  office, offices, officeOf, officeName, membersOf, keeperOf, hostId, iAmHost, myOfficeName, sessionMode: () => net.self?.session?.mode ?? 'mesh',
+  nameOf: (pid) => (pid === net.self?.id ? me.look?.name || 'You' : peersV.get(pid)?.name ?? 'someone'),
 };
 Town = initTown(W);
-window.WRView = { me, cam, orbit, peersV, MYLOT, LOTS, placeCamera, colliders };   // for tests and screenshots
+window.WRView = { me, cam, orbit, peersV, MYLOT, LOTS, placeCamera, colliders, office, offices, createOffice, joinOffice, net };   // for tests and screenshots
 Arena = initArena(W, Town);
 setMode(mode);
 window.View3D = {
@@ -1246,6 +1451,8 @@ window.View3D = {
   announce: (text) => Town?.announce(text),
   cart: () => Town?.recall(),
   arena: (args) => Arena?.command(args),
+  office: () => openOffices(),
+  host: (arg) => { if (arg === 'stop') netSend({ type: 'host.stop' }); else netSend({ type: 'host.start' }); },
   render(now, dt) {
     resize();
     paintCode(now);

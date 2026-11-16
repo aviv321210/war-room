@@ -131,7 +131,7 @@ const self = {
   hosts: Array.isArray(peerCfg.hosts) ? peerCfg.hosts.filter((h) => typeof h === 'string').slice(0, 20) : [],
 };
 function savePeerCfg() {
-  try { fs.writeFileSync(PEER_FILE, JSON.stringify({ id: self.id, code: self.code, hosts: self.hosts })); } catch { /* not fatal */ }
+  try { fs.writeFileSync(PEER_FILE, JSON.stringify({ id: self.id, code: self.code, hosts: self.hosts, host: peerCfg.host === true })); } catch { /* not fatal */ }
 }
 savePeerCfg();
 
@@ -229,31 +229,147 @@ function scheduleOffice(st) {
 }
 
 // --- peers -------------------------------------------------------------------------------------
-const peers = new Map();        // id -> { id, name, look, office, pos, ws, addr }
+// Two ways to be together on a LAN:
+//   mesh    - every studio connects to every other studio it finds. Fine for a few people.
+//   session - one studio hosts. Everybody else connects ONLY to the host, and the host passes everything on.
+//             Then only the host's LAN port has to be reachable, which is what a room of 50 PCs (each with its own
+//             firewall) needs. Whoever sees a host on the network joins it. The host is also the organiser of games.
+const peers = new Map();        // id -> { id, name, look, office, pos, addr, send, ws (direct link) | via (reached through the host) }
 const dialing = new Set();      // host:port being connected to
 const seen = new Map();         // id -> { addr, port, name, first }
+const session = { mode: peerCfg.host === true ? 'host' : 'mesh', host: null };   // host: the host's peer object while mode === 'member'
 function sendTo(ws, m) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m)); }
-function toPeers(m) { for (const p of peers.values()) sendTo(p.ws, m); }
+function toPeers(m) {
+  if (session.mode === 'member') { session.host.send(m); return; }      // the host passes it on to everybody
+  for (const p of peers.values()) p.send(m);
+}
+function toSome(ids, m) {
+  if (session.mode === 'member') { session.host.send({ t: 'to', ids, m }); return; }
+  for (const id of ids) peers.get(id)?.send(m);
+}
 function proof() { return self.code ? crypto.createHash('sha256').update('warroom-team:' + self.code).digest('hex').slice(0, 32) : ''; }
-const PROTO = 2;               // 2: positions in the nearest office's own frame (offices on both sides of the road), game relay
-function hello() { return { t: 'hello', app: 'warroom-peer', v: PROTO, id: self.id, name: self.name, proof: proof() }; }
+const PROTO = 3;               // 3: sessions (one host passes everything on), shared offices
+const MAX_LINKS = 90;
+function hello() { return { t: 'hello', app: 'warroom-peer', v: PROTO, id: self.id, name: self.name, proof: proof(), host: session.mode === 'host' }; }
 // a team-code mismatch is retried every few seconds: tell the window once per address, until the code changes
 const refusedSeen = new Set();
 function codeNotice(addr, text) { if (refusedSeen.has(addr) || refusedSeen.size > 50) return; refusedSeen.add(addr); toApps({ type: 'notice', text }); }
 function peerView(p) { return { id: p.id, name: p.name, look: p.look, office: p.office, pos: p.pos, addr: p.addr }; }
+const ID = /^[a-f0-9]{16}$/;
 
-function attachPeer(ws, addr, outbound) {
+// what one studio may tell the others, cleaned. Everything else is dropped.
+function clean(m) {
+  if (!m || typeof m !== 'object') return null;
+  switch (m.t) {
+    case 'presence': return { t: 'presence', name: str(m.name, 24), look: cleanLook(m.look) };
+    case 'office': return { t: 'office', office: cleanOffice(m.office) };
+    case 'pos': { const p = cleanPos(m); return p ? { t: 'pos', ...p } : null; }
+    case 'chat': { const text = str(m.text, 300).trim(); return text ? { t: 'chat', text } : null; }
+    case 'g': { const g = cleanGame(m); return g ? { t: 'g', k: g.k, d: g.d } : null; }
+  }
+  return null;
+}
+function apply(peer, c) {
+  switch (c.t) {
+    case 'presence': peer.name = c.name || peer.name; peer.look = c.look; toApps({ type: 'peer.presence', id: peer.id, name: peer.name, look: peer.look }); break;
+    case 'office': peer.office = c.office; toApps({ type: 'peer.office', id: peer.id, office: peer.office }); break;
+    case 'pos': { const { t, ...pos } = c; peer.pos = pos; toApps({ type: 'peer.pos', id: peer.id, pos }); break; }
+    case 'chat': toApps({ type: 'peer.chat', id: peer.id, name: peer.name, text: c.text, ts: Date.now() }); break;
+    case 'g': toApps({ type: 'peer.g', id: peer.id, k: c.k, d: c.d }); break;
+  }
+}
+
+// the host passes messages on in small bundles (one frame per member every 40 ms instead of one per message)
+const relayQ = [];             // [from id, json, to id | null]
+function relay(from, c, to = null) { relayQ.push([from, JSON.stringify(c), to]); }
+setInterval(() => {
+  if (!relayQ.length) return;
+  const q = relayQ.splice(0);
+  if (session.mode !== 'host') return;
+  for (const p of peers.values()) {
+    if (!p.ws || p.ws.readyState !== WebSocket.OPEN) continue;
+    if (p.ws.bufferedAmount > 8e6) { log(`${p.name} cannot keep up, reconnecting them`); p.ws.close(); continue; }
+    let s = '';
+    for (const [from, json, to] of q) {
+      if (from === p.id || (to && to !== p.id)) continue;
+      s += (s ? ',' : '') + `["${from}",${json}]`;
+      if (s.length > 120000) { p.ws.send(`{"t":"rb","a":[${s}]}`); s = ''; }
+    }
+    if (s) p.ws.send(`{"t":"rb","a":[${s}]}`);
+  }
+}, 40);
+const introOf = (p) => ({ id: p.id, name: p.name, look: p.look, office: p.office, pos: p.pos });
+
+function setMode(mode, hostPeer = null) {
+  session.mode = mode; session.host = hostPeer;
+  toApps(selfView());
+}
+// we found a host: from now on we talk only to it
+function becomeMember(hp) {
+  setMode('member', hp);
+  log(`joined the session of ${hp.name}`);
+  for (const p of [...peers.values()]) if (p !== hp && p.ws) { sendTo(p.ws, { t: 'bye' }); p.ws.close(); }   // they come back through the host
+}
+function leaveSession(why) {
+  for (const p of [...peers.values()]) if (p.via) { peers.delete(p.id); toApps({ type: 'peer.gone', id: p.id }); }
+  setMode('mesh');
+  if (why) toApps({ type: 'notice', text: why });
+}
+function addVirtual(v) {
+  const id = str(v?.id, 16), hp = session.host;
+  if (!hp || !ID.test(id) || id === self.id) return;
+  const old = peers.get(id);
+  if (old?.via) return;
+  if (old) { peers.delete(id); toApps({ type: 'peer.gone', id }); try { old.ws.close(); } catch { /* closing anyway */ } }
+  const p = { id, name: str(v.name, 24) || 'Someone', look: cleanLook(v.look), office: cleanOffice(v.office), pos: cleanPos(v.pos), addr: `through ${hp.name}`, via: hp,
+    send: (m) => hp.send({ t: 'to', ids: [id], m }) };
+  peers.set(id, p);
+  toApps({ type: 'peer.join', peer: peerView(p) });
+}
+function startHosting() {
+  if (session.mode === 'member') return `You are in the session of ${session.host.name}. Only one studio can host; ask them to stop first.`;
+  if (session.mode === 'host') return '';
+  peerCfg.host = true; savePeerCfg();
+  setMode('host');
+  log('hosting a session');
+  const list = [...peers.values()].filter((p) => p.ws);
+  for (const p of list) sendTo(p.ws, { t: 'role', host: true });
+  for (const p of list) sendTo(p.ws, { t: 'intros', a: list.filter((o) => o !== p).map(introOf) });
+  return '';
+}
+function stopHosting() {
+  if (session.mode !== 'host') return;
+  peerCfg.host = false; savePeerCfg();
+  for (const p of peers.values()) if (p.ws) sendTo(p.ws, { t: 'role', host: false });
+  setMode('mesh');
+  log('stopped hosting');
+}
+
+function attachPeer(ws, addr, outbound, port = 0) {
   let peer = null;
-  let budget = 60;                                     // messages per second a peer may send
-  const refill = setInterval(() => { budget = 60; }, 1000);
+  let budget = 60;                                     // messages per second a peer may send (the host's link carries everybody)
+  const refill = setInterval(() => { budget = peer && peer === session.host ? 600 : 60; }, 1000);
   const timer = setTimeout(() => ws.close(), 8000);
   if (outbound) ws.on('open', () => sendTo(ws, hello()));
   ws.on('message', (data) => {
     if (--budget < 0) return;
     let m; try { m = JSON.parse(data.toString()); } catch { return; }
     if (!peer) {
-      if (m.t === 'denied') { log(`peer ${addr} refused us: ${str(m.why, 60)}`); codeNotice(addr, m.why === 'version' ? `${addr} runs a different War Room version. Update both to the same one.` : `${addr} did not let you in: their team code is different from yours.`); ws.close(); return; }
-      if (m.t !== 'hello' || m.app !== 'warroom-peer' || typeof m.id !== 'string' || !/^[a-f0-9]{16}$/.test(m.id) || m.id === self.id) { ws.close(); return; }
+      if (m.t === 'denied') {
+        const why = str(m.why, 60);
+        if (why === 'session') {       // they are in somebody's session: go to that host instead
+          const g = m.go, h = str(g?.host, 80);
+          if (session.mode === 'mesh' && /^[\w.\-:]+$/.test(h)) dial(h, Math.round(num(g.port, 1, 65535)) || PEER_PORT);
+        } else {
+          log(`peer ${addr} refused us: ${why}`);
+          codeNotice(addr, why === 'version' ? `${addr} runs a different War Room version. Update both to the same one.`
+            : why === 'two hosts' ? `${addr} is hosting a session too. Only one studio on the network should host.`
+            : why === 'full' ? `${addr} has no room for more people.`
+            : `${addr} did not let you in: their team code is different from yours.`);
+        }
+        ws.close(); return;
+      }
+      if (m.t !== 'hello' || m.app !== 'warroom-peer' || typeof m.id !== 'string' || !ID.test(m.id) || m.id === self.id) { ws.close(); return; }
       if (str(m.proof, 64) !== proof()) {
         sendTo(ws, { t: 'denied', why: 'different team code' });
         codeNotice(addr, `${str(m.name, 24) || 'Someone'} (${addr}) tried to join with a different team code.`);
@@ -264,32 +380,84 @@ function attachPeer(ws, addr, outbound) {
         codeNotice(addr, `${str(m.name, 24) || 'Someone'} (${addr}) runs a different War Room version. Update both to the same one.`);
         ws.close(); return;
       }
+      const theyHost = m.host === true;
+      if (session.mode === 'member') {                 // we talk only to our host: send them there too
+        sendTo(ws, { t: 'denied', why: 'session', go: { host: session.host.addr, port: session.host.port || seen.get(session.host.id)?.port || PEER_PORT } });
+        ws.close(); return;
+      }
+      if (session.mode === 'host' && theyHost) {
+        sendTo(ws, { t: 'denied', why: 'two hosts' });
+        codeNotice(addr, `${str(m.name, 24) || 'Someone'} (${addr}) is hosting a session too. Only one studio on the network should host.`);
+        ws.close(); return;
+      }
+      if (peers.size >= MAX_LINKS) { sendTo(ws, { t: 'denied', why: 'full' }); ws.close(); return; }
       refusedSeen.delete(addr);
       const old = peers.get(m.id);
-      if (old && old.ws.readyState === WebSocket.OPEN) { ws.close(); return; }   // already connected the other way
+      if (old && old.ws?.readyState === WebSocket.OPEN) { ws.close(); return; }   // already connected the other way
       clearTimeout(timer);
       if (!outbound) sendTo(ws, hello());
-      peer = { id: m.id, name: str(m.name, 24) || 'Someone', look: null, office: null, pos: null, ws, addr };
+      peer = { id: m.id, name: str(m.name, 24) || 'Someone', look: null, office: null, pos: null, ws, addr, port, host: theyHost, send: (x) => sendTo(ws, x) };
       peers.set(peer.id, peer);
-      log(`peer joined: ${peer.name} (${addr})`);
+      log(`peer joined: ${peer.name} (${addr})${theyHost ? ', the host' : ''}`);
+      if (session.mode === 'host') {                    // tell the newcomer who is here, and everybody about the newcomer
+        const others = [...peers.values()].filter((o) => o !== peer && o.ws);
+        sendTo(ws, { t: 'intros', a: others.map(introOf) });
+        for (const o of others) sendTo(o.ws, { t: 'intros', a: [introOf(peer)] });
+      }
       sendTo(ws, { t: 'presence', name: self.name, look: self.look });
       if (office) sendTo(ws, { t: 'office', office });
       if (self.pos) sendTo(ws, { t: 'pos', ...self.pos });
       toApps({ type: 'peer.join', peer: peerView(peer) });
+      if (theyHost) becomeMember(peer);
       return;
     }
     switch (m.t) {
-      case 'presence': peer.name = str(m.name, 24) || peer.name; peer.look = cleanLook(m.look); toApps({ type: 'peer.presence', id: peer.id, name: peer.name, look: peer.look }); break;
-      case 'office': peer.office = cleanOffice(m.office); toApps({ type: 'peer.office', id: peer.id, office: peer.office }); break;
-      case 'pos': peer.pos = cleanPos(m); toApps({ type: 'peer.pos', id: peer.id, pos: peer.pos }); break;
-      case 'chat': { const text = str(m.text, 300).trim(); if (text) toApps({ type: 'peer.chat', id: peer.id, name: peer.name, text, ts: Date.now() }); break; }
-      case 'g': { const g = cleanGame(m); if (g) toApps({ type: 'peer.g', id: peer.id, k: g.k, d: g.d }); break; }
+      case 'presence': case 'office': case 'pos': case 'chat': case 'g': {
+        const c = clean(m);
+        if (!c) break;
+        apply(peer, c);
+        if (session.mode === 'host') relay(peer.id, c);
+        break;
+      }
+      case 'to': {                                      // a member asks the host to hand a game message to some people
+        if (session.mode !== 'host') break;
+        const c = clean(m.m);
+        if (!c || c.t !== 'g' || !Array.isArray(m.ids)) break;
+        for (const id of m.ids.slice(0, 64)) { if (id === self.id) apply(peer, c); else if (peers.has(id)) relay(peer.id, c, id); }
+        break;
+      }
+      case 'rb':                                        // the host passes on what the others said
+        if (peer !== session.host || !Array.isArray(m.a)) break;
+        for (const e of m.a.slice(0, 5000)) {
+          const v = Array.isArray(e) ? peers.get(e[0]) : null;
+          if (!v?.via) continue;
+          const c = clean(e[1]);
+          if (c) apply(v, c);
+        }
+        break;
+      case 'intros':
+        if (peer !== session.host || !Array.isArray(m.a)) break;
+        for (const v of m.a.slice(0, MAX_LINKS)) addVirtual(v);
+        break;
+      case 'outro': {
+        if (peer !== session.host) break;
+        const v = peers.get(str(m.id, 16));
+        if (v?.via) { peers.delete(v.id); toApps({ type: 'peer.gone', id: v.id }); }
+        break;
+      }
+      case 'role':
+        if (m.host === true && session.mode === 'mesh') { peer.host = true; becomeMember(peer); }
+        else if (m.host === false && peer === session.host) { peer.host = false; leaveSession(`${peer.name} stopped hosting the session.`); }
+        break;
       case 'bye': ws.close(); break;
     }
   });
   ws.on('close', () => {
     clearTimeout(timer); clearInterval(refill);
-    if (peer && peers.get(peer.id) === peer) { peers.delete(peer.id); log(`peer left: ${peer.name}`); toApps({ type: 'peer.gone', id: peer.id }); }
+    if (!peer || peers.get(peer.id) !== peer) return;
+    peers.delete(peer.id); log(`peer left: ${peer.name}`); toApps({ type: 'peer.gone', id: peer.id });
+    if (session.mode === 'host') for (const o of peers.values()) if (o.ws) sendTo(o.ws, { t: 'outro', id: peer.id });
+    if (peer === session.host) leaveSession(`The session host (${peer.name}) is gone. Looking for the session again...`);
   });
   ws.on('error', () => {});
 }
@@ -299,8 +467,8 @@ function dial(host, port) {
   if (dialing.has(key)) return;
   dialing.add(key);
   const h = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
-  const ws = new WebSocket(`ws://${h}:${port}/peer`, { handshakeTimeout: 5000, maxPayload: 256 * 1024 });
-  attachPeer(ws, host, true);
+  const ws = new WebSocket(`ws://${h}:${port}/peer`, { handshakeTimeout: 5000, maxPayload: 1024 * 1024 });
+  attachPeer(ws, host, true, port);
   ws.on('close', () => dialing.delete(key));
   ws.on('error', () => dialing.delete(key));
 }
@@ -309,7 +477,7 @@ const connectedTo = (id) => peers.has(id);
 // inbound peer connections (the only port reachable from the LAN)
 if (!NO_LAN) {
   const peerHttp = http.createServer((req, res) => res.writeHead(404).end());
-  const peerWss = new WebSocketServer({ server: peerHttp, path: '/peer', maxPayload: 256 * 1024 });
+  const peerWss = new WebSocketServer({ server: peerHttp, path: '/peer', maxPayload: 1024 * 1024 });
   peerWss.on('connection', (ws, req) => attachPeer(ws, (req.socket.remoteAddress ?? '?').replace(/^::ffff:/, ''), false));
   peerWss.on('error', () => {});                   // ws repeats the listen error of its http server: reported just below
   peerHttp.on('error', (e) => log(`LAN port ${PEER_PORT} unavailable (${e.code}); others cannot connect to us, we still connect to them`));
@@ -317,33 +485,39 @@ if (!NO_LAN) {
 
   // discovery: announce every 3 s on every IPv4 broadcast address
   const disco = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+  const card = () => Buffer.from(JSON.stringify({ app: 'warroom', v: 1, id: self.id, name: self.name, port: PEER_PORT, host: session.mode === 'host' }));
   disco.on('error', (e) => log(`LAN discovery off (${e.code})`));
   disco.on('message', (buf, rinfo) => {
     let m; try { m = JSON.parse(buf.toString()); } catch { return; }
-    if (m.app !== 'warroom' || typeof m.id !== 'string' || !/^[a-f0-9]{16}$/.test(m.id) || m.id === self.id) return;
+    if (m.app !== 'warroom' || typeof m.id !== 'string' || !ID.test(m.id) || m.id === self.id) return;
     const port = Math.round(num(m.port, 1, 65535));
-    if (!seen.has(m.id)) seen.set(m.id, { first: Date.now() });
+    if (!seen.has(m.id)) { if (seen.size > 500) return; seen.set(m.id, { first: Date.now() }); }
     Object.assign(seen.get(m.id), { addr: rinfo.address, port, name: str(m.name, 24), at: Date.now() });
-    if (connectedTo(m.id)) return;
+    if (connectedTo(m.id) || session.mode === 'member') return;
+    if (m.host === true) { if (session.mode === 'mesh') dial(rinfo.address, port); return; }   // a host: go to it
+    if (session.mode === 'host') {
+      // answer straight to the sender: a PC whose firewall hides our broadcasts still gets the answer to its own packet
+      disco.send(card(), rinfo.port, rinfo.address, () => {});
+      if (Date.now() - seen.get(m.id).first > 6000) dial(rinfo.address, port);     // and try to reach it ourselves
+      return;
+    }
     // the lower id dials; the other side waits a little, then dials too (in case it cannot be reached)
     if (self.id < m.id || Date.now() - seen.get(m.id).first > 8000) dial(rinfo.address, port);
   });
   disco.bind(DISCO_PORT, () => { try { disco.setBroadcast(true); } catch { /* ignore */ } });
-  const announce = () => {
-    const b = Buffer.from(JSON.stringify({ app: 'warroom', v: 1, id: self.id, name: self.name, port: PEER_PORT }));
-    for (const a of broadcastAddrs()) disco.send(b, DISCO_PORT, a, () => {});
-  };
+  const announce = () => { const b = card(); for (const a of broadcastAddrs()) disco.send(b, DISCO_PORT, a, () => {}); };
   setInterval(announce, 3000);
   setTimeout(announce, 500);
-  // coworkers added by name or address
-  setInterval(() => {
+  // coworkers (or the host) added by name or address
+  const dialSaved = () => {
+    if (session.mode === 'member') return;
     for (const h of self.hosts) {
       const [host, port] = splitHost(h);
-      const known = [...peers.values()].some((p) => p.addr === host);
-      if (!known) dial(host, port);
+      if (![...peers.values()].some((p) => p.addr === host)) dial(host, port);
     }
-  }, 10000);
-  setTimeout(() => { for (const h of self.hosts) dial(...splitHost(h)); }, 1500);
+  };
+  setInterval(dialSaved, 10000);
+  setTimeout(dialSaved, 1500);
 }
 function broadcastAddrs() {
   const out = new Set(['255.255.255.255']);
@@ -445,7 +619,8 @@ async function brainThink(ws, m) {
 const apps = new Set();
 function toApps(m) { const s = JSON.stringify(m); for (const a of apps) if (a.readyState === WebSocket.OPEN) a.send(s); }
 function selfView() {
-  return { type: 'self', id: self.id, name: self.name, addrs: myAddrs(), host: os.hostname(), port: PEER_PORT, code: self.code, hosts: self.hosts, lan: !NO_LAN, discovered: seen.size };
+  return { type: 'self', id: self.id, name: self.name, addrs: myAddrs(), host: os.hostname(), port: PEER_PORT, code: self.code, hosts: self.hosts, lan: !NO_LAN, discovered: seen.size,
+    session: { mode: session.mode, host: session.mode === 'host' ? { id: self.id, name: self.name } : session.host ? { id: session.host.id, name: session.host.name } : null } };
 }
 function worldApp(ws) {
   apps.add(ws);
@@ -472,14 +647,14 @@ function worldApp(ws) {
         const g = cleanGame(m);
         if (!g) break;
         const out = { t: 'g', k: g.k, d: g.d };
-        if (Array.isArray(m.to)) { for (const id of m.to.slice(0, 16)) { const p = peers.get(id); if (p) sendTo(p.ws, out); } } else toPeers(out);
+        if (Array.isArray(m.to)) toSome(m.to.filter((id) => typeof id === 'string').slice(0, 64), out); else toPeers(out);
         break;
       }
       case 'peer.add': {
         const h = str(m.host, 120).trim();
         if (!h || !/^[\w.\-:[\]]+$/.test(h)) { sendTo(ws, { type: 'notice', text: 'That is not a PC name or address.' }); break; }
         if (!self.hosts.includes(h)) { self.hosts.push(h); savePeerCfg(); }
-        dial(...splitHost(h));
+        if (session.mode !== 'member') dial(...splitHost(h));
         sendTo(ws, selfView());
         break;
       }
@@ -488,10 +663,12 @@ function worldApp(ws) {
         self.code = str(m.code, 64);
         savePeerCfg();
         refusedSeen.clear();
-        for (const p of peers.values()) { sendTo(p.ws, { t: 'bye' }); p.ws.close(); }   // reconnect under the new code
+        for (const p of [...peers.values()]) if (p.ws) { sendTo(p.ws, { t: 'bye' }); p.ws.close(); }   // reconnect under the new code
         toApps(selfView());
         break;
       case 'self': sendTo(ws, selfView()); break;
+      case 'host.start': { const no = startHosting(); if (no) sendTo(ws, { type: 'notice', text: no }); break; }
+      case 'host.stop': stopHosting(); break;
       case 'brain.think': brainThink(ws, m); break;
       case 'brain.key': {
         const k = str(m.key, 300).trim();

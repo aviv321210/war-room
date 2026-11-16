@@ -776,6 +776,8 @@ const HELP = `Plain text: a new goal for the team
 /chat <text>: to everyone on the campus   /say <text>: only to who stands near you
 /announce <text>: pin a note on the announcement boards   /cart: bring your cart
 /arena: the agent arena (squad, rules, budget)   /order <name|all> <text>: order your operatives
+/office: join or create an office   /host: host a session for everyone on this network
+/voice: microphone on or off (hold V to talk)
 /library: shared memory   J: next decision`;
 
 cmd.addEventListener('keydown', async (e) => {
@@ -825,10 +827,13 @@ async function runCommand(v) {
   switch (c.toLowerCase()) {
     case 'help': case '?': toast(HELP); return;
     case 'library': case 'memory': openLibrary(); return;
-    case 'chat': case 'say': case 'announce': case 'post': case 'cart': case 'car': case 'arena': case 'order': {
+    case 'chat': case 'say': case 'announce': case 'post': case 'cart': case 'car': case 'arena': case 'order': case 'office': case 'offices': case 'host': case 'voice': case 'mic': {
       const text = v.replace(/^\/\w+\s*/, ''), k = c.toLowerCase();
       if (!window.View3D?.chat) return toast('That needs the 3D view.', 'warn');
       if (k === 'cart' || k === 'car') return window.View3D.cart();
+      if (k === 'office' || k === 'offices') return window.View3D.office();
+      if (k === 'host') return window.View3D.host(text.trim());
+      if (k === 'voice' || k === 'mic') return window.View3D.voice ? window.View3D.voice(text.trim()) : toast('Voice is not available here.', 'warn');
       if (k === 'arena') return window.View3D.arena(text);
       if (k === 'order') return window.View3D.arena('order ' + text);
       if (!text) return toast(`Write something after /${k}.`, 'warn');

@@ -75,7 +75,7 @@ export function initTown(W) {
     AC.modal('board', '', `
       <div class="m-head"><h1>Announcements <span class="sub">the boards in front of every office show the same notes</span></h1><button class="x" data-close aria-label="Close">&times;</button></div>
       <div class="m-body">
-        ${notes.length ? `<ul class="notes">${notes.map((n) => `<li><b>${AC.esc(n.by)}</b> <span class="muted">${ago(n.ts)}</span>${n.mine ? ` <a href="#" data-rm="${AC.esc(n.id)}">remove</a>` : ''}<div>${AC.esc(n.text)}</div></li>`).join('')}</ul>` : '<p class="muted">Nothing posted yet.</p>'}
+        ${notes.length ? `<ul class="notes">${notes.slice(0, 40).map((n) => `<li><b>${AC.esc(n.by)}</b> <span class="muted">${ago(n.ts)}</span>${n.mine ? ` <a href="#" data-rm="${AC.esc(n.id)}">remove</a>` : ''}<div>${AC.esc(n.text)}</div></li>`).join('')}</ul>` : '<p class="muted">Nothing posted yet.</p>'}
         <h3>Post a note</h3>
         <div class="row"><input type="text" id="bd-text" maxlength="160" placeholder="For everyone on the campus, e.g. Stand-up at 10 in my office"><button id="bd-post">Post</button></div>
         <p class="muted">You keep your five newest notes. Also from the console: /announce your text</p>
@@ -145,8 +145,10 @@ export function initTown(W) {
     }
     return J;
   }
-  const ownerOf = (L) => (L === MYLOT ? W.myId() : L.owner ?? '');
-  const ownerName = (L) => (L === MYLOT ? 'your' : `${peersV.get(L.owner)?.name ?? 'a coworker'}'s`);
+  // a lot belongs to an office (a group of people). One of them, the "keeper", answers for its cell doors.
+  const ownerOf = (L) => (L === MYLOT ? W.office.id : L.owner ?? '');
+  const ownerName = (L) => (L === MYLOT ? "your office's" : `the ${W.officeName(L.owner)}`);
+  const iKeep = (L) => W.keeperOf(L) === W.myId();
   // which cell (x, z) is in: [lot, index] or null
   function cellAt(x, z) {
     for (const L of dressed) {
@@ -167,8 +169,9 @@ export function initTown(W) {
     for (const h of lockHooks) h(L, i, !!v, d);
   }
   function lockCell(L, i, v) {
-    if (L === MYLOT) { setCell(L, i, v); sendState(); }
-    else if (L.owner) W.netSend({ type: 'g', k: 'jreq', to: [L.owner], d: { i, v: v ? 1 : 0 } });
+    const keeper = W.keeperOf(L);
+    if (L === MYLOT && (!keeper || keeper === W.myId())) { setCell(L, i, v); sendState(); }
+    else if (keeper) W.netSend({ type: 'g', k: 'jreq', to: [keeper], d: { i, v: v ? 1 : 0 } });
   }
   let jailed = null;                               // { L, i, since } while you are behind a locked door
 
@@ -195,7 +198,8 @@ export function initTown(W) {
     scene.add(g);
     return g;
   }
-  const park = () => { const [x, z] = MYLOT.w(27, 22.2); return { x, z, rot: Math.PI / 2 }; };
+  // people who share an office park next to each other
+  const park = () => { const k = Math.max(0, W.membersOf(W.office.id).indexOf(W.myId())); const [x, z] = MYLOT.w([27, 30.7, 19.2][k % 3], 22.2 - Math.floor(k / 3) * 0.01); return { x, z, rot: Math.PI / 2 }; };
   const car = { ...park(), speed: 0, driving: false, mesh: null, color: '' };
   function myCart() {
     const color = me.look?.shirt ?? '#2f6f8f';
@@ -208,7 +212,7 @@ export function initTown(W) {
   function carFits(x, z, rot) {
     const s = Math.sin(rot), c = Math.cos(rot);
     for (const [px, pz] of [[0, 0], [0.6, 1.45], [-0.6, 1.45], [0.6, -1.45], [-0.6, -1.45]]) if (!clear(x + px * c + pz * s, z - px * s + pz * c)) return false;
-    return x > -158 && x < 188 && z > -78 && z < 108;
+    return x > -600 && x < 632 && z > -78 && z < 130;
   }
   function getIn() {
     if (jailed) return AC.toast('Not from inside a cell.', 'warn');
@@ -265,7 +269,7 @@ export function initTown(W) {
     if (!at) { if (T.cart) T.cart.visible = false; return; }
     const color = p.look?.shirt ?? '#8a5a3c';
     if (!T.cart || T.cartColor !== color) { if (T.cart) scene.remove(T.cart); T.cart = buildCart(color); T.cartColor = color; }
-    T.cart.visible = true; T.cart.position.set(at.x, 0, at.z); T.cart.rotation.y = at.rot;
+    T.cart.visible = Math.hypot(at.x - me.x, at.z - me.z) < 150; T.cart.position.set(at.x, 0, at.z); T.cart.rotation.y = at.rot;
     T.cartAt = at;
     if (driving) sit(av.fig, 0);
   }
@@ -299,7 +303,8 @@ export function initTown(W) {
   function onGame(p, k, d) {
     const T = (p.town ??= {});
     if (k === 'st') {
-      if (Array.isArray(d.jail)) { T.jail = d.jail.slice(0, CELLS).map((v) => (v ? 1 : 0)); if (p.lot?.jail) T.jail.forEach((v, i) => { if (p.lot.jail.cells[i] !== v) setCell(p.lot, i, v); }); }
+      // the doors of an office are as its keeper says (also for my own office, when the keeper is somebody else)
+      if (Array.isArray(d.jail)) { T.jail = d.jail.slice(0, CELLS).map((v) => (v ? 1 : 0)); if (p.lot?.jail && W.keeperOf(p.lot) === p.id) T.jail.forEach((v, i) => { if (p.lot.jail.cells[i] !== v) setCell(p.lot, i, v); }); }
       T.car = d.car && typeof d.car === 'object' ? { anchor: text(d.car.anchor, 16), dx: Number(d.car.dx), dz: Number(d.car.dz), rot: Number(d.car.rot) } : null;
       const posts = (Array.isArray(d.posts) ? d.posts : []).slice(0, 5).map((n) => ({ id: text(n?.id, 12), text: text(n?.text, 160), ts: Number.isFinite(n?.ts) ? n.ts : 0 })).filter((n) => n.id && n.text);
       const known = new Set((T.posts ?? []).map((n) => n.id));
@@ -309,8 +314,9 @@ export function initTown(W) {
     } else if (k === 'jreq') {
       const i = Number(d.i);
       if (!Number.isInteger(i) || i < 0 || i >= CELLS) return;
+      if (!iKeep(MYLOT)) return;
       setCell(MYLOT, i, d.v ? 1 : 0); sendState();
-      AC.toast(`${p.name} ${d.v ? 'locked' : 'unlocked'} cell ${i + 1} of your holding cells.`);
+      if (p.lot !== MYLOT) AC.toast(`${p.name} ${d.v ? 'locked' : 'unlocked'} cell ${i + 1} of your holding cells.`);
     } else if (k === 'say') {
       const s = text(d.text, 300), at = W.fromWire({ anchor: text(d.at?.anchor, 16), dx: Number(d.at?.dx), dz: Number(d.at?.dz) }) ?? (p.avatar?.shown ? { x: p.avatar.x, z: p.avatar.z } : null);
       if (!s || !at) return;
@@ -336,15 +342,26 @@ export function initTown(W) {
       L.boardAt = L.w(5, 23.4);
       dressed.push(L);
     }
-    const want = L === MYLOT ? MYLOT.jail.cells : peersV.get(L.owner)?.town?.jail ?? [0, 0, 0];
-    for (let i = 0; i < CELLS; i++) setCell(L, i, want[i] ? 1 : 0);
+    const keeper = W.keeperOf(L);
+    const want = keeper && keeper !== W.myId() ? peersV.get(keeper)?.town?.jail ?? [0, 0, 0] : L === MYLOT ? (homeOf === W.office.id ? MYLOT.jail.cells : [0, 0, 0]) : [0, 0, 0];
+    if (L === MYLOT) homeOf = W.office.id;
+    for (let i = 0; i < CELLS; i++) if (!!L.jail.cells[i] !== !!want[i] || !L.jail.set) setCell(L, i, want[i] ? 1 : 0);
+    L.jail.set = true;
+  }
+  let homeOf = W.office.id;                         // the office whose cells my own lot shows
+  // you moved to another office: your cart waits in front of it
+  function moved() {
+    if (car.driving) getOut();
+    Object.assign(car, park(), { speed: 0 });
+    jailed = null;
+    sendState();
   }
 
   // "E" near the things of this file
   function near(offer) {
     if (car.driving) { offer(0, 1, 'Get out of the cart', getOut); return; }
     if (!jailed) offer(dist(car.x, car.z), 2.5, 'Drive your cart', getIn);
-    for (const p of peersV.values()) { const at = p.town?.cartAt; if (at && p.town.cart?.visible && !p.pos?.car) offer(dist(at.x, at.z), 2.2, `${p.name}'s cart`, () => AC.toast(`Only ${p.name} drives that one. Yours waits by your office (or type /cart).`)); }
+    for (const p of peersV.values()) { const at = p.town?.cartAt; if (at && p.town.cart?.visible && !p.pos?.car && dist(at.x, at.z) < 4) offer(dist(at.x, at.z), 2.2, `${p.name}'s cart`, () => AC.toast(`Only ${p.name} drives that one. Yours waits by your office (or type /cart).`)); }
     for (const L of dressed) {
       if (!L.deco.visible || !(L === MYLOT || L.owner)) continue;
       offer(dist(...L.boardAt), 2.6, 'Read the announcements', () => openBoard());
@@ -382,5 +399,5 @@ export function initTown(W) {
     car, say, announce, getIn, getOut, recall, lockCell: (i, v, L = MYLOT) => lockCell(L, i, v), cells: (L = MYLOT) => [...L.jail.cells], cellAt,
     state: () => ({ car: { x: +car.x.toFixed(1), z: +car.z.toFixed(1), driving: car.driving, speed: +car.speed.toFixed(1) }, cells: [...MYLOT.jail.cells], jailed: jailed ? [jailed.i, Math.round((Date.now() - jailed.since) / 1000)] : null, posts: allPosts().map((p) => `${p.by}: ${p.text}`), lots: dressed.map((L) => L.key) }),
   };
-  return { update, near, drive, pose, peerPose, onGame, onJoin, onLeave, dressLot, where, say, announce, recall, driving: () => car.driving, heard, lockHooks, cellAt, lockCell, setCell, isJailed: () => !!jailed, CELL: { JX, JZ, CW, CELL_Z, CELLS }, cellX, dressed, ownerOf, HEAR };
+  return { update, near, drive, pose, peerPose, onGame, onJoin, onLeave, dressLot, where, moved, iKeep, say, announce, recall, driving: () => car.driving, heard, lockHooks, cellAt, lockCell, setCell, isJailed: () => !!jailed, CELL: { JX, JZ, CW, CELL_Z, CELLS }, cellX, dressed, ownerOf, HEAR };
 }
