@@ -101,6 +101,11 @@ This section is newer than "Campus" and "Arena" below; where they disagree, this
 - `voice.scenario.mjs` (`VOICE=1`): fake microphones; heard near, half volume at 10 m, silent out of earshot,
   dropped far away, push-to-talk.
 - `town.scenario.mjs`, `play.scenario.mjs` still pass.
+- The installer: built, installed without questions on this PC (475 MB), the launcher starts the Foreman (demo), the
+  studio server and the window in 4 s; the page reports 0.3.0 and finds Claude Code signed in. The Foreman also
+  starts with `--use-claude-login` ("claude auth ok"); real work by coding agents on a sign-in was not tried.
+- One real second PC was seen: the installed app found an old War Room at another address on the LAN and dialled
+  it (refused: old build, team code). So discovery and TCP between two machines work on this network.
 
 ### NOT verified
 - **Two real PCs.** Discovery, the firewall prompt on the host, WebRTC between two machines, echo in one room.
