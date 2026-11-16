@@ -43,7 +43,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
   const saved = load('wr-arena2', {});
   const cfg = {
     personal: typeof saved.personal === 'string' ? saved.personal.slice(0, 800) : '',
-    cadence: int(saved.cadence, 8, 60, 15),
+    cadence: int(saved.cadence, 8, 60, 20),
     claude: typeof saved.claude === 'boolean' ? saved.claude : null,      // may my operatives think with Claude on my account? (asked once)
     squad: Array.from({ length: MAX_SQUAD }, (_, i) => ({ name: text(saved.squad?.[i]?.name, 14), role: ROLES[saved.squad?.[i]?.role] ? saved.squad[i].role : ['guard', 'raider', 'talker'][i % 3], model: ['demo', 'haiku', 'sonnet'].includes(saved.squad?.[i]?.model) ? saved.squad[i].model : 'haiku' })),
   };
@@ -876,7 +876,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
     for (const el of box.querySelectorAll('[data-sq]')) el.onchange = () => { cfg.squad[Number(el.dataset.sq)][el.dataset.f] = el.dataset.f === 'name' ? text(el.value, 14) : el.value; save(); };
     document.getElementById('ar-rules').onchange = (e) => setTeamRules(e.target.value);
     document.getElementById('ar-own').onchange = (e) => { cfg.personal = lines(e.target.value, 800); save(); };
-    document.getElementById('ar-cad').onchange = (e) => { cfg.cadence = int(e.target.value, 8, 60, 15); save(); };
+    document.getElementById('ar-cad').onchange = (e) => { cfg.cadence = int(e.target.value, 8, 60, 20); save(); };
     document.getElementById('ar-setkey').onclick = () => { W.netSend({ type: 'brain.key', key: document.getElementById('ar-key').value }); document.getElementById('ar-key').value = ''; };
     document.getElementById('ar-signin').onclick = () => openSignin();
     document.getElementById('ar-claude').onchange = (e) => { cfg.claude = e.target.checked; save(); };
