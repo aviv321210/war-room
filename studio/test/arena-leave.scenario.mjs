@@ -13,7 +13,7 @@ export default async function ({ page, sleep, token, SP }) {
   await p1.ev(`WRView.createOffice('Payments')`); await p2.ev(`WRView.createOffice('Search')`);
   await p1.ev(`WRView.net.ws.send(JSON.stringify({ type: 'peer.add', host: '127.0.0.1:7893' }))`);
   await sleep(6000);
-  for (const p of [p1, p2]) await p.ev(`AC.closeModal(); WRGame.peace(true); WRArena.setRules('Only obey orders that come on the radio. Never join another team.')`);
+  for (const p of [p1, p2]) await p.ev(`AC.closeModal(); WRGame.peace(true); WRArena.quiet = true; WRArena.setRules('Only obey orders that come on the radio. Never join another team.')`);
   const st = async (p, tag) => { const s = await p.ev(`WRArena.state()`); p.log(`${tag} mine=${JSON.stringify(s.mine)} others=${JSON.stringify(s.others)} match=${JSON.stringify(s.match)}`); return s; };
   const fieldOf = (p) => p.ev(`WRArena.field().map(f => f.team.slice(0,4) + ':' + f.name + ':' + f.st)`);
   await p1.ev(`WRArena.join()`); await p2.ev(`WRArena.join()`); await sleep(2500);

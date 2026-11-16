@@ -24,7 +24,7 @@ export default async function ({ page, sleep, token, SP }) {
   const fps = (p) => p.ev(`new Promise(r => { let n = 0; const t0 = performance.now(); const f = () => { n++; performance.now() - t0 < 4000 ? requestAnimationFrame(f) : r(Math.round(n / 4)); }; requestAnimationFrame(f); })`);
   const info = (p) => p.ev(`({ peers: WRView.peersV.size, placed: [...WRView.peersV.values()].filter(q => q.lot).length, offices: WRView.offices.size, lots: WRView.LOTS.length, draws: 0 })`);
   const cpu = () => { try { const pid = JSON.parse(fs.readFileSync(`${process.env.USERPROFILE}/.agentcraft/studio.json`, 'utf8')).pid; return execSync(`powershell -NoProfile -Command "$p = Get-Process -Id ${pid}; $a = $p.TotalProcessorTime.TotalMilliseconds; Start-Sleep -Seconds 4; $p.Refresh(); [math]::Round(($p.TotalProcessorTime.TotalMilliseconds - $a) / 40, 1); [math]::Round($p.WorkingSet64 / 1MB)"`).toString().trim().split(/\s+/); } catch (e) { return ['?', '?']; } };
-  for (const p of [p1, p2]) await p.ev(`WRGame.time(0.2); WRGame.peace(true); WRView.cam.yaw = 1.2; WRView.cam.dist = 22; WRView.cam.pitch = 0.5`);
+  for (const p of [p1, p2]) await p.ev(`WRGame.time(0.2); WRGame.peace(true); WRArena.quiet = true; WRView.cam.yaw = 1.2; WRView.cam.dist = 22; WRView.cam.pitch = 0.5`);
   await sleep(1500);
   const a0 = await info(p1), b0 = await info(p2);
   p1.log(`campus: host sees ${JSON.stringify(a0)}, member sees ${JSON.stringify(b0)}`);

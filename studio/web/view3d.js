@@ -1114,9 +1114,11 @@ function openOffices(refresh) {
   };
 }
 // the first time there are other people around: ask which office
-let officeAsked = false, remindAt = 0;
+let officeAsked = false, remindAt = 0, avatarAsked = false;
 function officeTick(now) {
   if (!net.self) return;
+  // other people are here and you have no avatar yet: make one first (then you can pick an office and be seen)
+  if (!me.look && peersV.size && !avatarAsked && window.View3D?.visible && !AC.isModalOpen() && now > 4000) { avatarAsked = true; openCreator(); return; }
   if (office.ok || !peersV.size || !me.look || !window.View3D?.visible || AC.isModalOpen()) return;
   if (!officeAsked) { officeAsked = true; openOffices(); }
   else if (now - remindAt > 45000) { remindAt = now; AC.toast('Pick an office (the Office button) so the others can see you.', 'warn'); }

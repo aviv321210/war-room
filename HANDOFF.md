@@ -21,6 +21,105 @@ old AgentCraft builds will not see new ones, which is fine pre-release). **Insta
 Still AgentCraft: server.mjs's *default* `STATE` (`~/.agentcraft`; the launcher passes `--state`), this repo folder. Keep upstream credit + license
 (the Foreman is blendi-remade/agentcraft). Check the name is not taken by other software before shipping.
 
+## Version 0.3.0 (night of 2026-11-16/17): sessions, shared offices, team arena, Claude sign-in, voice
+
+Built for a workshop the next morning: about 50 people on one LAN, in about 20 shared offices, one organiser.
+This section is newer than "Campus" and "Arena" below; where they disagree, this one is right.
+
+### Sessions: one host passes everything on (`server.mjs`, "peers")
+- **Peer protocol v3.** Three modes per studio: `mesh` (as before, everybody connects to everybody, fine for a
+  few people), `host`, `member`. A host accepts everybody and relays; a member talks **only** to its host.
+  So only the host's TCP port 7891 has to be reachable. 50 PCs do not depend on 50 firewalls.
+- Becoming a member is automatic: a studio that hears a host (`host: true` in the UDP card or in `hello`) dials
+  it and drops its other links. The host also answers every discovery packet straight back to the sender, so a PC
+  whose firewall hides broadcasts still gets the answer to its own packet. A member that is dialled by somebody
+  else answers `denied: session` with the host's address. Fallback: type the host's PC name or IP in Coworkers.
+- Wire: member -> host plain messages (`presence`, `office`, `pos`, `chat`, `g`) mean "to everybody";
+  `{t:'to', ids, m}` is a targeted game message. Host -> member: `{t:'rb', a:[[fromId, msg], ...]}` (one bundle
+  every 40 ms per member), `intros`, `outro`, `role`. The host stamps the sender, so nobody can speak as somebody
+  else. Per-member budget 60 msg/s at the host; the host link allows 600 frames/s.
+- `host.start` / `host.stop` from the window (Coworkers panel, `/host`); kept in `studio-peer.json`.
+- **The host is the organiser** of the arena (window: `W.hostId()`, `W.iAmHost()`).
+
+### Offices: a building belongs to a group (`view3d.js`, "offices")
+- Everybody sends `of {id, name, born, slot, ok}`. An office exists while somebody is in it. Until a player has
+  picked one (`ok`), nobody else sees them; the Offices dialog opens by itself the first time others are around.
+  The host can move people (`of.move`, accepted only from the host) and lock the offices (arena settings).
+- Layout without an authority: every office claims a slot; on a clash the older office (`born`, then id) keeps
+  it and the other takes the lowest free one. Slot 0 is the middle, the rest alternate left/right and both sides
+  of the road. Each window shows that campus with its own office at the origin. Lots are made on demand
+  (`lotAt`); positions on the wire are in the frame of the nearest **office** (anchor = office id).
+- Shared by the members of an office: the desks (everybody's coding agents, activity only; your own sit first),
+  the board, the cells. One member, the **keeper** (lowest id present, `W.keeperOf`), answers for the cell
+  doors: `jreq` goes to the keeper, only the keeper's `st.jail` counts.
+
+### Arena for teams (`arena.js`, rewritten)
+- A team is an office. Every office fields the same number of operatives (organiser: 1 to 9, default 6), dealt
+  out among its members who joined; each member runs and pays for their own. Team rules: one text per office,
+  synced among its members (`ar.rules`, highest version wins), plus a personal part per member.
+- In a session only the host starts (`ar.start`) and ends matches. `ar.ses` carries the organiser's settings:
+  operatives per office, token budget per player and match, allowed models, minutes, office lock.
+- A match has a time limit; when it is up the side that started the match calls the result (`ar.over`) so that
+  everybody gets the same one. On the end everybody sends `ar.reveal` (their team rules, own rules, numbers) and
+  the Arena panel shows all teams side by side: that comparison is the lesson.
+- `/arena join|leave|start|end`, `/order <name|all> text`. Leaving forfeits. Late joiners watch.
+
+### Brains: Claude through Claude Code, on the player's own sign-in (`server.mjs`, "Arena brains")
+- One turn = one run of the **unmodified** `claude.exe` that ships in the Foreman's packages
+  (`@anthropic-ai/claude-agent-sdk-win32-x64`): `-p --model haiku|sonnet --effort low --system-prompt-file ...
+  --tools "" --output-format json --no-session-persistence --setting-sources "" --strict-mcp-config
+  --disable-slash-commands --max-turns 1`, in an empty temp folder, the situation on stdin. The answer is one
+  line of JSON (`MOVE_FORMAT`) that the server parses and checks. Haiku runs with `MAX_THINKING_TOKENS=0`.
+- Measured on this PC (Team plan): about 4.5 s and about 3,000 tokens a turn for both models; `haiku` is
+  Haiku 4.5 in Claude Code 2.1.286, `sonnet` is Sonnet 5.5. Default budget 300k tokens per player and match.
+- Sign-in: the window asks once ("Sign in with Claude"); the server then opens Claude Code's own
+  `claude auth login` in a console window (it opens the browser). The server only ever asks `auth status`.
+  An API key typed in the Arena panel is the alternative (memory only). The launcher has the same choice for the
+  coding agents (`mode=seat` -> the Foreman's `--use-claude-login`), **not tested**.
+- **Terms.** Anthropic's docs allow a person to sign in to the unmodified Claude Code with their own
+  subscription; they do not allow an app to offer claude.ai login itself, to handle the tokens, or to pay for its
+  users, and they say products built on the Agent SDK should use API keys unless approved
+  (code.claude.com/docs/en/legal-and-compliance, .../agent-sdk/overview). War Room stays inside the first part
+  (unmodified binary, Anthropic's own sign-in, no token handling, each person on their own plan, API key still
+  possible), but a game is arguably not "ordinary use" of Claude Code. The user was told to confirm with their
+  Anthropic contact. Do not remove the API-key path and do not touch the credentials file.
+
+### Voice (`voice.js`)
+- Hold V (or open microphone, or off; chip bottom left, `/voice`). WebRTC audio straight between the PCs, no
+  STUN/TURN (LAN only); offers come from the lower id; signalling is `vc.sig` through the relay, `vc.st` says who
+  listens and who has a microphone. A link exists only within 26 m and when one of the two has a microphone;
+  loudness falls from 4 m to nothing at 16 m (`Town.HEAR`). Agents never hear voice: typed `/say` only.
+
+### Verified (all on one PC, RTX 4090, headless Edge; `studio/test/`)
+- `offices.scenario.mjs` (+ `bots.mjs`): host, member and 10 bots; shared office, same layout, shared cells,
+  host moves a person, back to mesh.
+- `arena.scenario.mjs` (`HOST=1` for a session), `arena-leave.scenario.mjs`: whole team matches, demo brains.
+- `brain.scenario.mjs`: real Haiku and Sonnet turns on the signed-in seat (37 turns, 119k tokens in one run).
+- `crowd.scenario.mjs`: host + member + 48 bots = 50 players, 20 offices, 120 operatives in one match. Host
+  process under 20 % of one core, about 80 MB. Windows: about 50 fps on the campus, about 40 in the match
+  (two windows sharing the one GPU). `PROFILE=1` prints where a window spends its time.
+- `voice.scenario.mjs` (`VOICE=1`): fake microphones; heard near, half volume at 10 m, silent out of earshot,
+  dropped far away, push-to-talk.
+- `town.scenario.mjs`, `play.scenario.mjs` still pass.
+
+### NOT verified
+- **Two real PCs.** Discovery, the firewall prompt on the host, WebRTC between two machines, echo in one room.
+- **The installed app on a clean PC**, and slow laptops (integrated graphics): there is an automatic "light
+  graphics" switch under 24 fps (`#fast` forces it), never tried on such a machine.
+- The sign-in window on a PC that has never used Claude Code. The launcher's seat mode for the coding agents.
+- The API-key path of the brains (no key here). Seat usage limits with 50 people playing at once.
+
+### Building and releasing
+- `powershell -ExecutionPolicy Bypass -File build.ps1 -Repo D:\Aviv\Projects\agentcraft` -> `out\WarRoom-Setup.exe`
+  (135 MB). Needs `downloads\node.zip` (Node 26.13.1 win-x64, same major as the Foreman's node_modules) and
+  `downloads\mingit.zip` (MinGit 2.56.1 64-bit); both are on this PC, not in git.
+- Version in three places: `APP_VERSION` in `server.mjs`, `AppVersion` in `src/WarRoom.iss`, `AssemblyVersion`
+  in `src/Launcher.cs`. A peer with another protocol version is refused with a notice that names
+  `github.com/aviv321210/war-room/releases`.
+- Release: the user decided on GitHub Releases of this repo, made public by the user, and that Claude uploads
+  only after an explicit OK each time (`gh` was not installed on 2026-11-17). All commits carry the user's work
+  email; the user was told before making the repo public.
+
 ## Architecture
 
 - **Foreman** (`D:\Aviv\Projects\agentcraft\foreman`, Node/TS) — the real thing: runs the Claude agents, owns
@@ -169,6 +268,8 @@ decision, spends tokens or touches a repo.
   messages; keep them bounded and cosmetic). Blocks do not stop the walk camera. No sound volume setting
   beyond on/off in the backpack. Balance is a first guess.
 
+_(Older notes. Lots now belong to offices, not to single players: see "Version 0.3.0" above.)_
+
 ## Campus: lots, board, cart, cells, nearby talk (`studio/web/town.js`, `view3d.js`; added 2026-11-16)
 
 - **Offices on both sides of the road.** A lot is a column (48 m apart) and a side; a south lot is the same
@@ -194,6 +295,8 @@ decision, spends tokens or touches a repo.
   is a game rule, not privacy). `/chat` still reaches the whole campus.
 - Test: `studio/test/town.scenario.mjs` (two players). Test handles: `WRView`, `WRTown`.
 - **Not done:** voice; other people's carts are not obstacles; block worlds are still per player.
+
+_(Older notes. The arena is now played by teams (offices), in tokens, through Claude Code: see "Version 0.3.0" above. The hard lines below still hold.)_
 
 ## Arena (`studio/web/arena.js` + "Arena brains" in `server.mjs`; added 2026-11-16)
 

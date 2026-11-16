@@ -44,7 +44,8 @@ The rules of your team and of your commander follow. They are yours to obey.`;
   const cfg = {
     personal: typeof saved.personal === 'string' ? saved.personal.slice(0, 800) : '',
     cadence: int(saved.cadence, 8, 60, 15),
-    squad: Array.from({ length: MAX_SQUAD }, (_, i) => ({ name: text(saved.squad?.[i]?.name, 14), role: ROLES[saved.squad?.[i]?.role] ? saved.squad[i].role : ['guard', 'raider', 'talker'][i % 3], model: ['demo', 'haiku', 'sonnet'].includes(saved.squad?.[i]?.model) ? saved.squad[i].model : 'demo' })),
+    claude: typeof saved.claude === 'boolean' ? saved.claude : null,      // may my operatives think with Claude on my account? (asked once)
+    squad: Array.from({ length: MAX_SQUAD }, (_, i) => ({ name: text(saved.squad?.[i]?.name, 14), role: ROLES[saved.squad?.[i]?.role] ? saved.squad[i].role : ['guard', 'raider', 'talker'][i % 3], model: ['demo', 'haiku', 'sonnet'].includes(saved.squad?.[i]?.model) ? saved.squad[i].model : 'haiku' })),
   };
   const save = () => store('wr-arena2', cfg);
   // what the organiser of a session decides for everybody (without a host: these defaults)
@@ -178,7 +179,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
     mine.set(u.id, u);
     return u;
   }
-  const isDemo = (u) => u.model === 'demo' || !brain.ready || !ses.models.includes(u.model);
+  const isDemo = (u) => u.model === 'demo' || !brain.ready || cfg.claude !== true || !ses.models.includes(u.model);
   const poke = (u, ms = 500) => { u.nextThink = Math.min(u.nextThink, Math.max(performance.now() + ms, u.lastThink + (isDemo(u) ? 1500 : 5000))); };
   const event = (u, s) => { u.events.push(s); if (u.events.length > 6) u.events.shift(); poke(u); };
   function refPos(ref) {
@@ -515,9 +516,23 @@ The rules of your team and of your commander follow. They are yours to obey.`;
     W.netSend({ type: 'g', k: 'ar.start', d: m });
     begin({ ...m, by: myId() });
   }
+  // Before the first match: say plainly whose account the thinking runs on, and let the player choose.
+  function askClaude(then) {
+    AC.modal('claude-ok', '', `
+      <div class="m-head"><h1>Who thinks for your operatives?</h1><button class="x" data-close aria-label="Close">&times;</button></div>
+      <div class="m-body">
+        <p>This PC is signed in to Claude${brain.plan ? ` (${AC.esc(brain.plan)} plan)` : ''}. Your operatives can think with Claude (Haiku or Sonnet) <b>on your own account</b>: every turn of an operative uses about 3,000 tokens of your plan's usage, up to the budget of the match (${ktok(ses.budget)} now).</p>
+        <p class="muted">Or they use the free demo brain: simple built-in rules, no Claude. You can change this later in the Arena panel.</p>
+      </div>
+      <div class="m-foot"><button class="quiet" id="ck-no">Demo brain only</button><button id="ck-yes">Think with Claude on my account</button></div>`);
+    const pick = (v) => { cfg.claude = v; save(); AC.closeModal(); then(); };
+    document.getElementById('ck-yes').onclick = () => pick(true);
+    document.getElementById('ck-no').onclick = () => pick(false);
+  }
   function setOn(v) {
     if (v === on) return AC.toast(v ? 'You are already in the arena.' : 'You are not in the arena.');
     if (v && !W.office.ok && peersV.size) return AC.toast('Pick an office first (the Office button): your office is your team.', 'warn');
+    if (v && brain.ready && cfg.claude === null && !window.WRArena.quiet) return askClaude(() => { setOn(true); openPanel(); });
     const quit = !v && running() && active() > 0;
     on = v;
     if (!v) { for (const u of mine.values()) dropView(u.id); mine.clear(); if (match?.over) match = null; }
@@ -654,6 +669,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
         if (running()) speak({ id: r.id, name: r.name, team: p.id, side: sideOf(p.id), x: at.x, z: at.z, unit: true }, s);
         break;
       }
+      case 'ar.call': if (p.id === W.hostId() && !on && !playing()) { AC.toast(`${p.name} calls everybody into the arena: press "Join the arena".`); if (!AC.isModalOpen()) openPanel(); } break;
       case 'ar.ev': { const s = text(d.text, 200); if (s && (on || match) && concerns({ s: text(d.s, 12), o: text(d.o, 12) })) note(s); break; }
     }
   }
@@ -661,7 +677,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
     if (m.type === 'brain.status') {
       brain = { cli: !!m.cli, signedIn: !!m.signedIn, plan: text(m.plan, 20), key: !!m.key, via: text(m.via, 8), ready: !!m.ready, spent: fin(m.spent), budget: fin(m.budget, 300000), calls: fin(m.calls), max: fin(m.max, 3000000), known: true };
       if (AC.modalKind() === 'arena') paintStatus();
-      if (AC.modalKind() === 'signin' && brain.signedIn) { AC.closeModal(); AC.toast('Signed in to Claude. Your operatives can think with Haiku or Sonnet now.'); }
+      if (AC.modalKind() === 'signin' && brain.signedIn) { cfg.claude = true; save(); AC.closeModal(); AC.toast('Signed in to Claude. Your operatives can think with Haiku or Sonnet now.'); }
       return;
     }
     brain.spent = fin(m.spent, brain.spent); brain.budget = fin(m.budget, brain.budget);
@@ -825,7 +841,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
           <label>Minutes <input type="number" id="ho-min" min="2" max="30" value="${hostCfg.minutes}"></label></div>
         <div class="row wrap"><label><input type="checkbox" id="ho-haiku" ${hostCfg.models.includes('haiku') ? 'checked' : ''}> Haiku allowed</label><label><input type="checkbox" id="ho-sonnet" ${hostCfg.models.includes('sonnet') ? 'checked' : ''}> Sonnet allowed</label>
           <label><input type="checkbox" id="ho-lock" ${hostCfg.lock ? 'checked' : ''}> Lock the offices (nobody changes team)</label>
-          ${match && !match.over ? '<button class="quiet" id="ho-end">End the match now</button>' : ''}</div>` : ''}
+          ${match && !match.over ? '<button class="quiet" id="ho-end">End the match now</button>' : '<button class="quiet" id="ho-call">Call everybody into the arena</button>'}</div>` : ''}
         <h3>Your operatives <span class="muted">${n} of your office's ${ses.total}${mates().length ? ' (the rest belong to your teammates who joined)' : ''}</span></h3>
         <table class="squad"><tr><th>Name</th><th>Job</th><th>Brain</th><th></th></tr>
         ${cfg.squad.slice(0, n).map((s, i) => { const u = mine.get(`${myId().slice(0, 8)}${i}`); return `<tr><td><input type="text" maxlength="14" data-sq="${i}" data-f="name" value="${AC.esc(s.name)}" placeholder="a name"></td>
@@ -840,6 +856,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
         <div class="row wrap"><label>Each operative thinks at least every <input type="number" id="ar-cad" min="8" max="60" step="1" value="${cfg.cadence}"> s</label>
           <span class="muted">Budget this match: ${ktok(match && !match.over ? match.budget : ses.budget)} for all your operatives together${host ? ' (set by the organiser)' : ''}.</span></div>
         <p id="ar-brain"></p>
+        <div class="row wrap"><label><input type="checkbox" id="ar-claude" ${cfg.claude === true ? 'checked' : ''}> My operatives may think with Claude on my own account</label></div>
         <div class="row wrap"><button id="ar-signin" hidden>Sign in with Claude</button>
           <details class="keybox"><summary>Use an API key instead</summary><div class="row"><input type="password" id="ar-key" placeholder="Anthropic API key (sk-ant-...)" autocomplete="off"><button class="quiet" id="ar-setkey">Use key</button></div>
           <p class="muted">Kept in the memory of your own studio server until it stops. Never saved, never sent to anybody. Leave it empty and press the button to go back to your sign-in.</p></details></div>
@@ -862,6 +879,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
     document.getElementById('ar-cad').onchange = (e) => { cfg.cadence = int(e.target.value, 8, 60, 15); save(); };
     document.getElementById('ar-setkey').onclick = () => { W.netSend({ type: 'brain.key', key: document.getElementById('ar-key').value }); document.getElementById('ar-key').value = ''; };
     document.getElementById('ar-signin').onclick = () => openSignin();
+    document.getElementById('ar-claude').onchange = (e) => { cfg.claude = e.target.checked; save(); };
     document.getElementById('ar-join').onclick = () => { setOn(!on); openPanel(); };
     const st = document.getElementById('ar-start'); if (st) st.onclick = () => { AC.closeModal(); start(); };
     if (iHost) {
@@ -872,6 +890,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
       };
       for (const id of ['ho-total', 'ho-budget', 'ho-min', 'ho-lock', 'ho-haiku', 'ho-sonnet']) document.getElementById(id).onchange = push;
       const end = document.getElementById('ho-end'); if (end) end.onclick = () => { endNow(); };
+      const callAll = document.getElementById('ho-call'); if (callAll) callAll.onclick = () => { W.netSend({ type: 'g', k: 'ar.call', d: {} }); AC.toast('Everybody who has not joined yet sees the Arena panel now.'); };
     }
     paintStatus();
     W.netSend({ type: 'brain.status' });
@@ -927,6 +946,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
     if (!askedSignin && brain.known && brain.cli && !brain.ready && me.look && visible && !AC.isModalOpen() && now > 6000) { askedSignin = true; store('wr-signin-asked', true); openSignin(); }
   }
   window.WRArena = {
+    quiet: false,                   // tests: join without the "whose account" question
     command, start, endNow, join: () => setOn(true), cfg, mine, field, places, setRules: setTeamRules, openSignin,
     host: (v) => { hostCfg = cleanSes({ ...hostCfg, ...v }); store('wr-arena-host', hostCfg); if (W.iAmHost()) { ses = { ...hostCfg }; sendState(true); } return hostCfg; },
     state: () => ({ on, ses, brain, team: { v: team.v, text: team.text.slice(0, 80) }, match: match && { id: match.id, running: running(), over: match.over, winner: match.winner && sideName(match.winner), how: match.how, teams: match.order.map((oid) => `${sideName(oid)}:${sideCount(oid)}`), reveals: match.reveals.size },

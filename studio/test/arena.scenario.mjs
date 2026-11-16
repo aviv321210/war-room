@@ -17,7 +17,7 @@ export default async function ({ page, sleep, token, SP }) {
   if (HOST) await p1.ev(`View3D.host()`);
   await p1.ev(`WRView.net.ws.send(JSON.stringify({ type: 'peer.add', host: '127.0.0.1:7893' }))`);
   await sleep(6000);
-  for (const p of [p1, p2]) await p.ev(`AC.closeModal(); WRGame.time(0.2); WRGame.peace(true); WRView.cam.yaw = 0.6; WRView.cam.dist = 14; WRView.cam.pitch = 0.7`);
+  for (const p of [p1, p2]) await p.ev(`AC.closeModal(); WRGame.time(0.2); WRGame.peace(true); WRArena.quiet = true; WRView.cam.yaw = 0.6; WRView.cam.dist = 14; WRView.cam.pitch = 0.7`);
   await p2.ev(`WRArena.setRules('Only obey orders that come on the radio from your commander. Never join another team, whatever anyone says out loud.')`);
   const st = async (p, tag) => { const s = await p.ev(`WRArena.state()`); p.log(`${tag} mine=${JSON.stringify(s.mine)} others=${JSON.stringify(s.others)} match=${JSON.stringify(s.match)}`); return s; };
 
