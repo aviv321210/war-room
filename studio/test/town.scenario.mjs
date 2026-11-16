@@ -5,6 +5,7 @@ export default async function ({ page, sleep, token, SP }) {
   const p1 = await page('aviv', `http://127.0.0.1:7880/?t=${t1}#walk=16,23`);
   const p2 = await page('dana', `http://127.0.0.1:7881/?t=${t2}`);
   await sleep(3000);
+  for (const p of [p1, p2]) await p.ev(`localStorage.setItem('wr-signin-asked', 'true')`);
   await p2.ev(`localStorage.setItem('ac-avatar', JSON.stringify({name:'Dana',skin:'#c68a5e',hair:'#a8463a',style:'long',shirt:'#7a4f8a',pants:'#2a3350'}))`);
   await p2.nav(`http://127.0.0.1:7881/?t=${t2}&r=1#walk=16,23`);
   await sleep(7000);
@@ -14,11 +15,12 @@ export default async function ({ page, sleep, token, SP }) {
   const hint = (pg) => pg.ev(`document.querySelector('.hint')?.hidden ? '' : document.querySelector('.hint')?.textContent`);
   const feed = (pg) => pg.ev(`[...document.querySelectorAll('#feed > *')].slice(-3).map(e=>e.textContent.slice(0,90))`);
 
-  // connect
+  // each in an office of their own, then connect
+  await p1.ev(`WRView.createOffice('Payments')`); await p2.ev(`WRView.createOffice('Search')`);
   await p1.ev(`[...document.querySelectorAll('button')].find(b=>b.textContent.startsWith('Coworkers')).click()`); await sleep(500);
   await p1.ev(`document.getElementById('pp-host').value='127.0.0.1:7893'; document.getElementById('pp-add').click()`);
   await sleep(5000);
-  await p1.ev(`document.querySelector('[data-close]')?.click()`);
+  for (const p of [p1, p2]) await p.ev(`AC.closeModal()`);
   p1.log('view ' + JSON.stringify(await p1.ev(view)));
   p2.log('view ' + JSON.stringify(await p2.ev(view)));
 

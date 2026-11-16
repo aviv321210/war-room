@@ -291,7 +291,7 @@ kbd { background: var(--paper); color: var(--ink); border-radius: 4px; padding: 
 .plate.op { pointer-events: none; padding: 2px 7px 3px; }
 .plate.op .hpbar { height: 3px; background: rgba(0,0,0,.45); border-radius: 2px; margin: 2px 0 1px; overflow: hidden; }
 .plate.op .hpbar i { display: block; height: 100%; background: #6fbf5a; }
-.arena-chip { position: absolute; right: 10px; top: 10px; z-index: 5; background: rgba(26,20,16,.82); color: var(--text); border: 1px solid var(--brass); border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer; display: flex; gap: 5px; align-items: center; }
+.arena-chip { position: absolute; right: 10px; top: 44px; z-index: 5; background: rgba(26,20,16,.82); color: var(--text); border: 1px solid var(--brass); border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer; display: flex; gap: 5px; align-items: center; }
 .arena-chip .dot, .plate.op .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
 .arena textarea { width: 100%; box-sizing: border-box; font: 13px/1.4 Consolas, monospace; background: #1a1410; color: var(--text); border: 1px solid #5a4a3c; border-radius: 6px; padding: 8px; resize: vertical; }
 .arena .squad { width: 100%; border-collapse: collapse; }

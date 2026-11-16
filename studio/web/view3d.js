@@ -117,6 +117,7 @@ function shown(o) { for (; o; o = o.parent) if (!o.visible && !o.userData.culled
 function box(w, h, d, material, x, y, z, opts = {}) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
   m.position.set(x, y, z);
+  m.matrixAutoUpdate = false; m.updateMatrix();      // it never moves: three.js need not work its place out again every frame
   m.castShadow = opts.cast ?? true; m.receiveShadow = true;
   if (opts.click) { m.userData.click = opts.click; clickables.push(m); }
   if (opts.solid) { const [cx, cz] = BUILD.lot ? BUILD.lot.w(x, z) : [x, z]; colliders.push({ x0: cx - w / 2, x1: cx + w / 2, z0: cz - d / 2, z1: cz + d / 2, g: m }); }
@@ -132,6 +133,7 @@ function frontBox(w, h, d, side, front, x, y, z, opts) {
 function plane(w, d, material, x, y, z, parent) {
   const p = new THREE.Mesh(new THREE.PlaneGeometry(w, d), material);
   p.rotation.x = -Math.PI / 2; p.position.set(x, y, z); p.receiveShadow = true;
+  p.matrixAutoUpdate = false; p.updateMatrix();
   (parent ?? BUILD.parent ?? scene).add(p);
   return p;
 }
@@ -864,8 +866,10 @@ function hover(e) {
 // frame
 // ---------------------------------------------------------------------------------------------
 let size = '';
+let viewW = 1, viewH = 1;        // the size of the view, read once a frame (asking the page for it per label is slow)
 function resize() {
   const w = floorEl.clientWidth, h = floorEl.clientHeight, key = w + 'x' + h;
+  if (w && h) { viewW = w; viewH = h; }
   if (key === size || !w || !h) return;
   size = key;
   renderer.setSize(w, h, false);
@@ -912,7 +916,7 @@ function fromWire(w) {
 const projV = new THREE.Vector3();
 function toScreen(x, y, z) {
   projV.set(x, y, z).project(camera);
-  return { x: (projV.x + 1) / 2 * floorEl.clientWidth, y: (1 - projV.y) / 2 * floorEl.clientHeight, hidden: projV.z > 1 || Math.abs(projV.x) > 1.1 || Math.abs(projV.y) > 1.1 };
+  return { x: (projV.x + 1) / 2 * viewW, y: (1 - projV.y) / 2 * viewH, hidden: projV.z > 1 || Math.abs(projV.x) > 1.1 || Math.abs(projV.y) > 1.1 };
 }
 
 function netConnect() {
@@ -1044,7 +1048,7 @@ function assignLots() {
     if (O.signText !== g.name) { O.paintSign(g.name); O.signText = g.name; }
     g.lot = L; g.O = O; used.add(L);
   }
-  for (const L of LOTS) if (L.owner && !used.has(L)) { L.office.G.visible = false; L.office.G.userData.culled = false; L.owner = null; }
+  for (const L of LOTS) if (L.owner && !used.has(L)) { L.office.G.visible = false; cull(L.office.G, false); cull(L.deco, false); L.owner = null; }
   offices.clear();
   for (const g of groups.values()) offices.set(g.id, g);
   for (const p of peersV.values()) { const g = p.of?.ok ? groups.get(p.of.id) : null; p.lot = g?.lot ?? null; p.O = g?.O ?? null; }
@@ -1144,6 +1148,7 @@ function placePeerAvatar(p, now, dt) {
   const av = p.avatar, at = p.pos ? fromWire(p.pos) : null;
   if (!av || !at) { if (av) { av.fig.root.visible = false; av.shown = false; } Town?.peerPose(p, null); return; }
   if (!av.shown || Math.hypot(at.x - av.x, at.z - av.z) > 12) { av.x = at.x; av.z = at.z; av.rot = at.rot; av.shown = true; }
+  if (Math.hypot(at.x - camera.position.x, at.z - camera.position.z) > 130) { av.x = at.x; av.z = at.z; av.fig.root.visible = false; Town?.peerPose(p, av); return; }   // too far to see
   const k = Math.min(1, dt * 10);
   av.x += (at.x - av.x) * k; av.z += (at.z - av.z) * k;
   av.rot += norm(at.rot - av.rot) * Math.min(1, dt * 12);
@@ -1219,7 +1224,7 @@ function peerPlates() {
       overlayEl.append(p.dom.plate, p.dom.say);
     }
     const av = p.avatar;
-    const vis = av && av.shown && window.View3D.visible;
+    const vis = av && av.shown && av.fig.root.visible && window.View3D.visible;
     const s = vis ? toScreen(av.x, 34 * PX + 0.15, av.z) : { hidden: true };
     p.dom.plate.hidden = s.hidden;
     if (!s.hidden) {
@@ -1385,6 +1390,12 @@ function renderPeersPanel(refresh) {
 }
 netConnect();
 
+// A far office is taken out of the scene (three.js then does not even walk through its hundreds of parts). It
+// still stands: "culled" keeps its walls solid for whoever walks there.
+function cull(G, far) {
+  G.userData.culled = far;
+  if (far) { if (G.parent) G.parent.remove(G); } else if (!G.parent) scene.add(G);
+}
 function updatePeers(now, dt) {
   const fx = mode === 'walk' ? me.x : orbit.target.x, fz = mode === 'walk' ? me.z : orbit.target.z;
   const ctxs = new Map();
@@ -1392,7 +1403,7 @@ function updatePeers(now, dt) {
     let c = ctxs.get(L);
     if (c) return c;
     const [cx, cz] = L.w(16, 10);
-    c = { free: new Set(DESKS.map((d, k) => k)), owners: new Map(), spots: new Map(), open: 0, tasks: [], far: L !== MYLOT && Math.hypot(cx - fx, cz - fz) > 130 };
+    c = { free: new Set(DESKS.map((d, k) => k)), owners: new Map(), spots: new Map(), open: 0, tasks: [], far: L !== MYLOT && Math.hypot(cx - fx, cz - fz) > 105 };
     if (L === MYLOT) {                            // your own agents sit first
       for (const k of deskOf.values()) c.free.delete(k);
       for (const a of S.agents.values()) { const st = a.active ? a.station : 'lounge'; c.spots.set(st, (c.spots.get(st) ?? 0) + 1); }
@@ -1409,7 +1420,7 @@ function updatePeers(now, dt) {
   for (const g of offices.values()) {
     if (g.lot === MYLOT) continue;
     const c = ctxOf(g.lot);
-    g.O.G.visible = !c.far; g.O.G.userData.culled = c.far;
+    cull(g.O.G, c.far); cull(g.lot.deco, c.far);
     if (c.far) continue;
     dressOffice(g.O, c.owners, c.open, now);
     fillCards(g.O, c.tasks);
@@ -1421,6 +1432,25 @@ function updatePeers(now, dt) {
   sun.target.position.set(fx, 0, fz); sun.position.set(fx - 8, 30, fz + 16);
 }
 
+// A PC that cannot keep up (under 24 pictures a second for a while) gets lighter graphics: no shadows, and
+// one picture point per screen point. "#fast" in the address does it from the start, "#pretty" never.
+let lastFrame = 0, slowMs = 0, light = false;
+function lightGraphics() {
+  if (light) return;
+  light = true;
+  renderer.shadowMap.enabled = false; sun.castShadow = false;
+  renderer.setPixelRatio(1);
+  scene.traverse((o) => { for (const m of Array.isArray(o.material) ? o.material : o.material ? [o.material] : []) m.needsUpdate = true; });
+  size = '';
+}
+function watchSpeed() {
+  const t = performance.now(), real = t - lastFrame;
+  lastFrame = t;
+  if (light || real > 500 || location.hash.includes('pretty')) return;        // (a long gap: the window was hidden)
+  if (location.hash.includes('fast')) return lightGraphics();
+  slowMs = real > 42 ? slowMs + real : Math.max(0, slowMs - real * 2);
+  if (slowMs > 6000) { lightGraphics(); AC.toast('Graphics set to light to keep things smooth on this PC.'); }
+}
 Game = initGame({
   THREE, scene, camera, el, floorEl, overlayEl, me, mat, AC, S, sun, hemi, blocked, busy, toScreen,
   lots: () => ALL_LOTS, extraHit: (dmg) => !!Arena?.playerHit(dmg), getMode: () => mode, isVisible: () => !!window.View3D?.visible,
@@ -1435,7 +1465,7 @@ const W = {
   nameOf: (pid) => (pid === net.self?.id ? me.look?.name || 'You' : peersV.get(pid)?.name ?? 'someone'),
 };
 Town = initTown(W);
-window.WRView = { me, cam, orbit, peersV, MYLOT, LOTS, placeCamera, colliders, office, offices, createOffice, joinOffice, net };   // for tests and screenshots
+window.WRView = { renderer, me, cam, orbit, peersV, MYLOT, LOTS, placeCamera, colliders, office, offices, createOffice, joinOffice, net };   // for tests and screenshots
 Arena = initArena(W, Town);
 setMode(mode);
 window.View3D = {
@@ -1454,6 +1484,7 @@ window.View3D = {
   office: () => openOffices(),
   host: (arg) => { if (arg === 'stop') netSend({ type: 'host.stop' }); else netSend({ type: 'host.start' }); },
   render(now, dt) {
+    watchSpeed();
     resize();
     paintCode(now);
     updateCards();

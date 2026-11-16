@@ -719,7 +719,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
       if (f.st === 'dead') continue;
       seen.add(f.id);
       if (!f.mine) { const k = Math.min(1, dt * 9); f.r.sx += (f.r.at.x - f.r.sx) * k; f.r.sz += (f.r.at.z - f.r.sz) * k; f.x = f.r.sx; f.z = f.r.sz; }
-      const far = Math.hypot(f.x - me.x, f.z - me.z) > 140 && W.getMode() === 'walk';
+      const far = Math.hypot(f.x - W.camera.position.x, f.z - W.camera.position.z) > 120;
       if (far && !views.has(f.id)) continue;
       const v = viewOf(f);
       const lying = f.st === 'ko' || f.st === 'carried', lift = f.st === 'carried' ? 1.25 : 0;

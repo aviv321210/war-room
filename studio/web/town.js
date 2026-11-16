@@ -178,23 +178,48 @@ export function initTown(W) {
   // -------------------------------------------------------------------------------------------
   // your cart: E gets in and out, W/S drive, A/D steer, Shift goes faster
   // -------------------------------------------------------------------------------------------
+  // A cart is 30 boxes. With 50 carts on the campus that would be 1500 things to draw, so the boxes of one
+  // material are joined into one shape (made once, shared by every cart).
+  function mergeBoxes(list) {
+    const pos = [], nor = [], uv = [], idx = [];
+    for (const [w, h, d, x, y, z] of list) {
+      const b = new THREE.BoxGeometry(w, h, d), base = pos.length / 3, p = b.attributes.position.array;
+      for (let i = 0; i < p.length; i += 3) pos.push(p[i] + x, p[i + 1] + y, p[i + 2] + z);
+      for (const v of b.attributes.normal.array) nor.push(v);
+      for (const v of b.attributes.uv.array) uv.push(v);
+      for (const i of b.index.array) idx.push(i + base);
+      b.dispose();
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.setIndex(idx);
+    return geo;
+  }
+  const cartGeo = (() => {
+    const parts = { paint: [], trim: [], dark: [], metal: [], lamp: [], tail: [], glass: [] };
+    const add = (w, h, d, m, x, y, z) => parts[m].push([w, h, d, x, y, z]);
+    add(1.7, 0.3, 3.3, 'paint', 0, 0.45, 0);
+    add(1.7, 0.42, 0.9, 'paint', 0, 0.8, 1.2);
+    add(1.74, 0.1, 0.94, 'trim', 0, 1.03, 1.2);
+    add(1.7, 0.32, 1.0, 'paint', 0, 0.76, -1.15);
+    for (const s of [-1, 1]) { add(0.12, 0.34, 1.5, 'paint', s * 0.79, 0.77, 0); add(0.1, 1.25, 0.1, 'dark', s * 0.78, 1.4, -0.62); }
+    add(1.66, 0.1, 0.1, 'dark', 0, 2.0, -0.62);
+    add(1.5, 0.75, 0.14, 'trim', 0, 0.98, -0.34);
+    add(1.5, 0.14, 0.6, 'trim', 0, 0.62, -0.02);
+    add(1.5, 0.5, 0.05, 'glass', 0, 1.3, 0.78);
+    add(0.5, 0.06, 0.34, 'dark', -0.38, 1.12, 0.6);
+    for (const [x, z] of [[-0.92, 1.15], [0.92, 1.15], [-0.92, -1.15], [0.92, -1.15]]) { add(0.26, 0.66, 0.66, 'dark', x, 0.33, z); add(0.28, 0.3, 0.3, 'metal', x, 0.33, z); }
+    for (const s of [-1, 1]) { add(0.36, 0.16, 0.06, 'lamp', s * 0.55, 0.82, 1.66); add(0.3, 0.14, 0.06, 'tail', s * 0.6, 0.8, -1.66); }
+    add(1.76, 0.14, 0.14, 'dark', 0, 0.42, 1.66); add(1.76, 0.14, 0.14, 'dark', 0, 0.42, -1.66);
+    return Object.fromEntries(Object.entries(parts).map(([k, list]) => [k, mergeBoxes(list)]));
+  })();
+  const tailMat = mat({ color: '#b8362c', emissive: '#b8362c', emissiveIntensity: 0.6 }), glassMat = new THREE.MeshLambertMaterial({ color: '#bfe4f0', transparent: true, opacity: 0.35 });
   function buildCart(color) {
     const g = new THREE.Group();
-    const paint = mat({ color }), dark = M.dark, trim = mat({ color: W.shade(color, -0.35) });
-    const add = (w, h, d, m, x, y, z, cast = true) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(x, y, z); b.castShadow = cast; b.receiveShadow = true; g.add(b); return b; };
-    add(1.7, 0.3, 3.3, paint, 0, 0.45, 0);
-    add(1.7, 0.42, 0.9, paint, 0, 0.8, 1.2);
-    add(1.74, 0.1, 0.94, trim, 0, 1.03, 1.2);
-    add(1.7, 0.32, 1.0, paint, 0, 0.76, -1.15);
-    for (const s of [-1, 1]) { add(0.12, 0.34, 1.5, paint, s * 0.79, 0.77, 0); add(0.1, 1.25, 0.1, dark, s * 0.78, 1.4, -0.62); }
-    add(1.66, 0.1, 0.1, dark, 0, 2.0, -0.62);
-    add(1.5, 0.75, 0.14, trim, 0, 0.98, -0.34);
-    add(1.5, 0.14, 0.6, trim, 0, 0.62, -0.02);
-    add(1.5, 0.5, 0.05, new THREE.MeshLambertMaterial({ color: '#bfe4f0', transparent: true, opacity: 0.35 }), 0, 1.3, 0.78, false);
-    add(0.5, 0.06, 0.34, dark, -0.38, 1.12, 0.6, false);
-    for (const [x, z] of [[-0.92, 1.15], [0.92, 1.15], [-0.92, -1.15], [0.92, -1.15]]) { add(0.26, 0.66, 0.66, dark, x, 0.33, z); add(0.28, 0.3, 0.3, M.metal, x, 0.33, z, false); }
-    for (const s of [-1, 1]) { add(0.36, 0.16, 0.06, M.lampOn, s * 0.55, 0.82, 1.66, false); add(0.3, 0.14, 0.06, mat({ color: '#b8362c', emissive: '#b8362c', emissiveIntensity: 0.6 }), s * 0.6, 0.8, -1.66, false); }
-    add(1.76, 0.14, 0.14, dark, 0, 0.42, 1.66); add(1.76, 0.14, 0.14, dark, 0, 0.42, -1.66);
+    const mats = { paint: mat({ color }), trim: mat({ color: W.shade(color, -0.35) }), dark: M.dark, metal: M.metal, lamp: M.lampOn, tail: tailMat, glass: glassMat };
+    for (const [k, geo] of Object.entries(cartGeo)) { const b = new THREE.Mesh(geo, mats[k]); b.castShadow = !['glass', 'lamp', 'tail'].includes(k); b.receiveShadow = true; g.add(b); }
     scene.add(g);
     return g;
   }
@@ -269,7 +294,7 @@ export function initTown(W) {
     if (!at) { if (T.cart) T.cart.visible = false; return; }
     const color = p.look?.shirt ?? '#8a5a3c';
     if (!T.cart || T.cartColor !== color) { if (T.cart) scene.remove(T.cart); T.cart = buildCart(color); T.cartColor = color; }
-    T.cart.visible = Math.hypot(at.x - me.x, at.z - me.z) < 150; T.cart.position.set(at.x, 0, at.z); T.cart.rotation.y = at.rot;
+    T.cart.visible = Math.hypot(at.x - me.x, at.z - me.z) < 110; T.cart.position.set(at.x, 0, at.z); T.cart.rotation.y = at.rot;
     T.cartAt = at;
     if (driving) sit(av.fig, 0);
   }

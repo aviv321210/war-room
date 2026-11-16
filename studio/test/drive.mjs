@@ -42,6 +42,14 @@ async function page(name, url) {
     async mouse(x, y, button = 'left') { for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await c('Input.dispatchMouseEvent', { type, x, y, button: type === 'mouseMoved' ? 'none' : button, buttons: type === 'mousePressed' ? (button === 'right' ? 2 : 1) : 0, clickCount: 1, pointerType: 'mouse' }); },
     async nav(u) { await c('Page.navigate', { url: u }); },
     async reload() { await c('Page.reload', {}); },
+    async profile(ms = 4000, top = 16) {       // where the page spends its time: the functions with the most self time
+      await c('Profiler.enable'); await c('Profiler.setSamplingInterval', { interval: 500 }); await c('Profiler.start'); await sleep(ms);
+      const { result: { profile } } = await c('Profiler.stop');
+      const self = new Map(), dt = profile.timeDeltas ?? [], byId = new Map(profile.nodes.map((n) => [n.id, n]));
+      (profile.samples ?? []).forEach((id, i) => { const n = byId.get(id); const k = `${n.callFrame.functionName || '(anon)'} ${n.callFrame.url.split('/').pop()}:${n.callFrame.lineNumber + 1}`; self.set(k, (self.get(k) ?? 0) + (dt[i] ?? 0)); });
+      const total = [...self.values()].reduce((a, b) => a + b, 0);
+      return [...self].sort((a, b) => b[1] - a[1]).slice(0, top).map(([k, v]) => `${(v / total * 100).toFixed(1)}% ${k}`);
+    },
     close: () => send('Target.closeTarget', { targetId }),
   };
   sessions.set(sessionId, pg);
