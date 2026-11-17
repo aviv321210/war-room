@@ -8,11 +8,19 @@ $ErrorActionPreference = 'Stop'
 $Home2 = Join-Path $env:USERPROFILE '.warroom\second'
 $FPort = 7879; $SPort = 7881; $PeerPort = 7893; $DiscoPort = 7894
 
-function Kill-Port($port) {
-  $line = netstat -ano | Select-String 'LISTENING' | Select-String ":$port " | Select-Object -First 1
-  if ($line) { $id = [int](($line.ToString().Trim() -split '\s+')[-1]); if ($id -gt 0) { Stop-Process -Id $id -Force -Confirm:$false; "stopped port $port" } }
+# the second office's processes are the node.exe ones whose command line names its folder (ports are not reliable:
+# netstat does not always list them)
+function Stop-Second {
+  $n = 0
+  Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($Home2) } | ForEach-Object {
+    try { Stop-Process -Id $_.ProcessId -Force -Confirm:$false -ErrorAction Stop; $n++ } catch {}
+  }
+  Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains((Join-Path $Home2 'window')) -and -not $_.CommandLine.Contains('--type=') } | ForEach-Object {
+    try { Stop-Process -Id $_.ProcessId -Force -Confirm:$false -ErrorAction Stop } catch {}
+  }
+  $n
 }
-if ($Stop) { Kill-Port $SPort; Kill-Port $FPort; exit 0 }
+if ($Stop) { "stopped $(Stop-Second) processes of the second office"; exit 0 }
 
 $node = Join-Path $App 'runtime\node\node.exe'
 if (-not (Test-Path $node)) { throw "War Room is not installed in $App (run WarRoom-Setup.exe first)." }
@@ -24,7 +32,7 @@ $cfg = @{ hosts = @("127.0.0.1:7891"); code = ''; host = $false }
 if (Test-Path $peerFile) { try { $old = Get-Content $peerFile -Raw | ConvertFrom-Json; if ($old.id) { $cfg.id = $old.id } } catch {} }
 ($cfg | ConvertTo-Json -Compress) | Out-File -Encoding ascii $peerFile
 
-Kill-Port $SPort | Out-Null; Kill-Port $FPort | Out-Null
+Stop-Second | Out-Null; Start-Sleep -Milliseconds 500
 $env:AGENTCRAFT_HOME = $Home2
 Start-Process -WindowStyle Hidden -FilePath $node -WorkingDirectory (Join-Path $App 'foreman') `
   -ArgumentList "--import tsx src/main.ts --backend sim --profile sim --home `"$Home2`" --port $FPort" `
