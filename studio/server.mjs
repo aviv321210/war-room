@@ -250,7 +250,7 @@ function toSome(ids, m) {
 }
 function proof() { return self.code ? crypto.createHash('sha256').update('warroom-team:' + self.code).digest('hex').slice(0, 32) : ''; }
 const PROTO = 3;               // 3: sessions (one host passes everything on), shared offices
-const APP_VERSION = '0.3.0', GET_IT = 'github.com/aviv321210/war-room/releases';       // keep in step with src/WarRoom.iss
+const APP_VERSION = '0.3.1', GET_IT = 'github.com/aviv321210/war-room/releases';       // keep in step with src/WarRoom.iss
 const OTHER_VERSION = `Everybody needs the same version: the newest installer is at ${GET_IT}`;
 const MAX_LINKS = 90;
 function hello() { return { t: 'hello', app: 'warroom-peer', v: PROTO, id: self.id, name: self.name, proof: proof(), host: session.mode === 'host' }; }

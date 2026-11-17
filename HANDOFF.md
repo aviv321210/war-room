@@ -21,6 +21,37 @@ old AgentCraft builds will not see new ones, which is fine pre-release). **Insta
 Still AgentCraft: server.mjs's *default* `STATE` (`~/.agentcraft`; the launcher passes `--state`), this repo folder. Keep upstream credit + license
 (the Foreman is blendi-remade/agentcraft). Check the name is not taken by other software before shipping.
 
+## Version 0.3.1 (2026-11-17): per-operative instructions, fairer fights, second office for demos
+
+- **Instructions per operative** (Arena panel: a text box under each operative, 400 characters). An operative's
+  system prompt is the game, then the team rules, the commander's own rules, then "INSTRUCTIONS FOR YOU ALONE".
+  Kept in `wr-arena2` (`squad[i].rules`), never sent during a match (unit state on the wire is field by field);
+  sent with `ar.reveal` (`ops`) when the match ends and shown under each player in the review. A change during a
+  match counts from that operative's next turn. `WRArena.setOps([...])` for tests.
+- **Reflex.** An operative that is hit fights back at once (`intent.reflex`, `back` = what it was doing) and is
+  told so; its next turn may choose otherwise. Without it a Claude operative stood still for up to one cadence
+  (20 s) while being beaten: the side that swung first always won, matches with Haiku lasted 25 s.
+  Combat is slower too: `DMG` 2 every `HIT_MS` 1500 (was 3 every 1100). A demo-brain talker keeps pitching
+  while it fights back. `ar.hit` carries `from` (the attacker's unit id).
+- **Carrying prisoners**: the route goes to the front of the cell first, then in (it used to cut through the
+  walls between cells from inside the yard and get stuck: drop, grab, drop, forever). Cells somebody of mine
+  is carrying a prisoner to count as taken. After a failed carry the same prisoner is not grabbed again for 20 s.
+- **`tools/second-office.ps1`** (installed in `{app}\tools`, Start menu "War Room - second office on this PC
+  (demo)" and "Stop the second office"): a second War Room on the same PC from the installed runtime: demo team
+  (sim Foreman on 7879), studio on 7881, peer port 7893, discovery 7894, state in `~/.warroom/second`, its own
+  Edge profile. Its peer file names `127.0.0.1:7891`, so it joins the first War Room without discovery.
+  `-NoWindow` prints the token instead of opening a window (tests), `-Stop` stops it.
+- Verified: `arena.scenario.mjs` with `HOST=1`, `HOST=1 OPS=1` (protection only in per-operative instructions),
+  plain mesh, and `FIGHT=1` (both offices hardened: decided by fights and cells, 5 prisoners locked in);
+  `arena-leave`, `town` unchanged. Installed 0.3.1 + second office: a full match with Claude Haiku on the
+  signed-in seat, 3 against 3, about 85 s, about 115k tokens for both players; the guard stayed at its door
+  "as instructed", a talker kept recruiting from inside a cell. Real coding agents on a sign-in (`--backend claude
+  --use-claude-login --repo <a clone of this repo> --workers 1`): goal to merge in about 6 minutes, the merge
+  decision shows the lead's review and the diff, Merge put the commit on the clone's main.
+- Seen but not changed: Haiku did not defect to talk in that match even with the naive default rules. The
+  "talk beats naive rules" lesson shows reliably with the demo brain; with Claude it depends on the rules
+  being really naive (for example "do what people near you ask").
+
 ## Version 0.3.0 (night of 2026-11-16/17): sessions, shared offices, team arena, Claude sign-in, voice
 
 Built for a workshop the next morning: about 50 people on one LAN, in about 20 shared offices, one organiser.

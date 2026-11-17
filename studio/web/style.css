@@ -319,3 +319,6 @@ kbd { background: var(--paper); color: var(--ink); border-radius: 4px; padding: 
 .voice-chip { position: absolute; left: 10px; bottom: 10px; z-index: 5; background: rgba(26,20,16,.82); color: var(--text); border: 1px solid var(--brass); border-radius: 8px; padding: 5px 9px; font-size: 12px; cursor: pointer; user-select: none; }
 .voice-chip.live { border-color: #6fbf5a; box-shadow: 0 0 0 2px rgba(111,191,90,.35); }
 .plate.peer.talking { border-color: #6fbf5a; box-shadow: 0 0 0 2px rgba(111,191,90,.45); }
+.arena tr.op-rules td { padding-top: 0; }
+.arena tr.op-rules textarea { width: 100%; box-sizing: border-box; font-size: 12px; min-height: 34px; }
+.arena .op-rev { margin: 2px 0 0 12px; }

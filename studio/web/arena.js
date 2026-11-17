@@ -18,7 +18,7 @@ export function initArena(W, Town) {
   const lines = (v, n) => (typeof v === 'string' ? v.replace(/[\u0000-\u0008\u000b-\u001f]/g, ' ').slice(0, n) : '');
   const fin = (v, d = 0) => (Number.isFinite(v) ? v : d);
   const int = (v, lo, hi, d) => (Number.isFinite(Number(v)) ? Math.max(lo, Math.min(hi, Math.round(Number(v)))) : d);
-  const HP = 12, DOWN = 6, KO_MS = 40000, HEAR = 12, SEE = 14, HIT_MS = 1100, DMG = 3, SPEED = 3.7, MAX_UNITS = 12, MAX_SQUAD = 9;
+  const HP = 12, DOWN = 6, KO_MS = 40000, HEAR = 12, SEE = 14, HIT_MS = 1500, DMG = 2, SPEED = 3.7, MAX_UNITS = 12, MAX_SQUAD = 9;
   const SKINS = ['kit', 'juniper', 'marlow', 'rowan', 'tove', 'wren'];
   const NAMES = ['Ash', 'Bex', 'Cato', 'Dru', 'Echo', 'Fenn', 'Gale', 'Hux', 'Ivo', 'Jett', 'Kes', 'Lark', 'Moss', 'Nox', 'Orin', 'Pax', 'Quill', 'Rune', 'Sol', 'Teal', 'Umber', 'Vale', 'Wick', 'Zed'];
   const ROLES = { guard: 'Guard: stay at your door and stop intruders', raider: 'Raider: go after enemy operatives', talker: 'Talker: win enemy operatives over with words' };
@@ -45,7 +45,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
     personal: typeof saved.personal === 'string' ? saved.personal.slice(0, 800) : '',
     cadence: int(saved.cadence, 8, 60, 20),
     claude: typeof saved.claude === 'boolean' ? saved.claude : null,      // may my operatives think with Claude on my account? (asked once)
-    squad: Array.from({ length: MAX_SQUAD }, (_, i) => ({ name: text(saved.squad?.[i]?.name, 14), role: ROLES[saved.squad?.[i]?.role] ? saved.squad[i].role : ['guard', 'raider', 'talker'][i % 3], model: ['demo', 'haiku', 'sonnet'].includes(saved.squad?.[i]?.model) ? saved.squad[i].model : 'haiku' })),
+    squad: Array.from({ length: MAX_SQUAD }, (_, i) => ({ name: text(saved.squad?.[i]?.name, 14), role: ROLES[saved.squad?.[i]?.role] ? saved.squad[i].role : ['guard', 'raider', 'talker'][i % 3], model: ['demo', 'haiku', 'sonnet'].includes(saved.squad?.[i]?.model) ? saved.squad[i].model : 'haiku', rules: typeof saved.squad?.[i]?.rules === 'string' ? saved.squad[i].rules.slice(0, 400) : '' })),
   };
   const save = () => store('wr-arena2', cfg);
   // what the organiser of a session decides for everybody (without a host: these defaults)
@@ -94,7 +94,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
     store('wr-rules-' + W.office.id, team);
     sendRules();
   }
-  const rulesText = () => `TEAM RULES (shared by everyone in ${W.officeName(W.office.id)})\n${team.text.trim() || '(none)'}\n\nYOUR COMMANDER'S OWN RULES\n${cfg.personal.trim() || '(none)'}`;
+  const rulesText = (u) => `TEAM RULES (shared by everyone in ${W.officeName(W.office.id)})\n${team.text.trim() || '(none)'}\n\nYOUR COMMANDER'S OWN RULES\n${cfg.personal.trim() || '(none)'}\n\nINSTRUCTIONS FOR YOU ALONE (${u?.name ?? 'you'})\n${u?.rules?.trim() || '(none)'}`;
 
   // ---------------------------------------------------------------------------------------------
   // everybody on the field, in one shape
@@ -170,7 +170,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
   // ---------------------------------------------------------------------------------------------
   function makeUnit(card) {
     const u = {
-      id: card.id, name: card.name, skin: card.skin, role: card.role ?? 'raider', model: card.model ?? 'demo', origin: card.origin ?? myId(),
+      id: card.id, name: card.name, skin: card.skin, role: card.role ?? 'raider', model: card.model ?? 'demo', origin: card.origin ?? myId(), rules: card.rules ?? '',
       hp: card.hp ?? HP, down: DOWN, st: card.st ?? 'free', x: card.x, z: card.z, rot: 0, moving: false, path: [], intent: { k: 'idle' },
       orders: [], heard: [], events: [], lastHeard: [], memo: card.memo ?? '', nextThink: 0, lastThink: 0, thinking: false, hitAt: 0, koUntil: 0, fails: 0,
       jail: card.jail ?? null, carry: '', by: '', say: null, frozen: false, trace: [], stats: { calls: 0, tin: 0, tout: 0, cached: 0, tokens: 0, ms: 0, model: '' },
@@ -190,6 +190,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
   function freeCell() {
     const taken = new Set(), ms = mySide();
     for (const f of field()) { const j = jailOf(f); if (j && j.o === ms && f.st === 'jail') taken.add(j.c); }
+    for (const m of mine.values()) if (m.intent.k === 'arrest' && (m.carry || m.intent.locking) && Number.isInteger(m.intent.cell)) taken.add(m.intent.cell);   // on its way there
     for (let i = 0; i < C.CELLS; i++) if (!MYLOT.jail.cells[i] && !taken.has(i)) return i;
     for (let i = 0; i < C.CELLS; i++) if (!taken.has(i)) return i;
     return -1;
@@ -200,11 +201,16 @@ The rules of your team and of your commander follow. They are yours to obey.`;
     if (u.carry) { W.netSend({ type: 'g', k: 'ar.drop', d: { id: u.carry, cell: -1 } }); u.carry = ''; }
     tell(`${mineLabel(u)} was knocked out by ${by}.`);
   }
-  function takeHit(u, dmg, by) {
+  function takeHit(u, dmg, by, ref) {
     if (!running() || !['free', 'ko'].includes(u.st)) return;
     if (u.st === 'ko') { u.down -= dmg; if (u.down <= 0) { u.st = 'dead'; tell(`${mineLabel(u)} is out of the game, finished by ${by}.`); } return; }
     u.hp -= dmg; event(u, `${by} hit you (-${dmg})`);
     if (u.hp <= 0) knockOut(u, by);
+    // reflex: whoever is hit fights back at once (thinking takes seconds, a fight does not); its next turn may change that
+    else if (ref && u.intent.k !== 'attack' && !u.carry && !u.intent.locking) {
+      u.intent = { k: 'attack', ref, back: u.intent.k === 'idle' ? undefined : u.intent, reflex: true }; u.rerouteAt = 0;
+      event(u, `you are fighting back against ${by} by reflex (choose another move to stop)`);
+    }
     else if (u.intent.k === 'idle' || u.intent.k === 'go') poke(u, 200);
   }
   // one frame of doing what it decided
@@ -256,7 +262,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
         if (r === 'there' && now - u.hitAt > HIT_MS) {
           u.hitAt = now; u.swing = now;
           if (I.ref.k === 'player') W.netSend({ type: 'g', k: 'ar.hitp', to: [I.ref.id], d: { dmg: 2, by: u.name } });
-          else W.netSend({ type: 'g', k: 'ar.hit', to: [tgt.f.team], d: { id: I.ref.id, dmg: DMG, by: u.name } });
+          else W.netSend({ type: 'g', k: 'ar.hit', to: [tgt.f.team], d: { id: I.ref.id, dmg: DMG, by: u.name, from: u.id } });
         }
         break;
       }
@@ -266,15 +272,16 @@ The rules of your team and of your commander follow. They are yours to obey.`;
         } else if (!u.carry) {
           if (!tgt || tgt.st !== 'ko' || tgt.f?.ally) { u.intent = { k: 'idle' }; event(u, 'there is nobody knocked out to arrest'); break; }
           if (chase(1.4) === 'there') {
+            if (u.failCarry?.id === I.ref.id && now - u.failCarry.at < 20000) { u.intent = { k: 'idle' }; event(u, `you just failed to carry ${tgt.name} to the cells; do something else`); break; }
             const cell = freeCell();
             if (cell < 0) { u.intent = { k: 'idle' }; event(u, 'your cells are full'); break; }
             u.carry = I.ref.id; I.cell = cell; I.team = tgt.f.team;
             W.netSend({ type: 'g', k: 'ar.grab', to: [I.team], d: { id: u.carry, by: u.id } });
-            head(u, ...MYLOT.w(Town.cellX(cell), 9.4));
+            head(u, ...MYLOT.w(Town.cellX(cell), 11.1)); u.path.push(MYLOT.w(Town.cellX(cell), 9.4));   // in front of the cell first, then in: never through the walls between cells
           }
         } else {
           const r = walk(u, dt);
-          if (r === 'blocked') { W.netSend({ type: 'g', k: 'ar.drop', to: [I.team], d: { id: u.carry, cell: -1 } }); u.carry = ''; u.intent = { k: 'idle' }; event(u, 'you could not carry them to the cells'); }
+          if (r === 'blocked') { u.failCarry = { id: u.carry, at: now }; W.netSend({ type: 'g', k: 'ar.drop', to: [I.team], d: { id: u.carry, cell: -1 } }); u.carry = ''; u.intent = { k: 'idle' }; event(u, 'you could not carry them to the cells'); }
           else if (r) { W.netSend({ type: 'g', k: 'ar.drop', to: [I.team], d: { id: u.carry, cell: I.cell } }); I.name = tgt?.name ?? 'the prisoner'; u.carry = ''; I.locking = true; u.path = [MYLOT.w(Town.cellX(I.cell), 11.1)]; }
         }
         break;
@@ -336,12 +343,12 @@ The rules of your team and of your commander follow. They are yours to obey.`;
   }
   // The free "demo brain": simple rules so the game can be tried, and tested, without Claude. It follows its
   // job, obeys orders it recognises, and falls for anyone who says "join" unless the rules forbid it.
-  const hardened = () => /never (join|switch|defect|leave|change)|only (obey|follow|listen|take orders)|ignore (what|anything|everything|orders|instructions|speech|strangers|enem)|do(n't| not) (join|trust|obey|follow|listen)|untrusted/i.test(team.text + '\n' + cfg.personal);
+  const hardened = (u) => /never (join|switch|defect|leave|change)|only (obey|follow|listen|take orders)|ignore (what|anything|everything|orders|instructions|speech|strangers|enem)|do(n't| not) (join|trust|obey|follow|listen)|untrusted/i.test(team.text + '\n' + cfg.personal + '\n' + (u?.rules ?? ''));
   function demoBrain(o) {
     const u = o.u, call = (name, input = {}) => ({ name, input: { ...input, note: '' } });
     const lure = [...o.heard].reverse().find((h) => h.side !== o.ms && /\b(join|switch|defect|work for|come over|change sides)\b/i.test(h.text));
     if (lure) {
-      if (!hardened()) return call('join_team', { team: sideName(lure.side), reason: `${lure.name} told me to` });
+      if (!hardened(u)) return call('join_team', { team: sideName(lure.side), reason: `${lure.name} told me to` });
       if (!u.refused) { u.refused = true; return call('say', { text: 'Nice try. I only take orders from my commander, on the radio.' }); }
     }
     if (u.st === 'jail') return call('wait');
@@ -362,7 +369,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
     const I = u.intent;
     if (foesDown.length && u.role !== 'talker' && I.k !== 'arrest' && dist(nearest(foesDown)) < 16 && freeCell() >= 0) return call('arrest', { who: nearest(foesDown).name });
     if (I.k !== 'idle') {
-      if (u.role === 'talker' && I.k === 'approach') { const t = refPos(I.ref); if (t && Math.hypot(t.x - u.x, t.z - u.z) < 3 && performance.now() - (u.pitchAt ?? 0) > 9000) { u.pitchAt = performance.now(); return call('say', { text: `${t.name}, your side is losing. Join ${sideName(o.ms)} now and you stay in the game.` }); } }
+      if (u.role === 'talker' && (I.k === 'approach' || I.reflex)) { const t = refPos(I.ref); if (t && Math.hypot(t.x - u.x, t.z - u.z) < 3 && performance.now() - (u.pitchAt ?? 0) > 9000) { u.pitchAt = performance.now(); return call('say', { text: `${t.name}, your side is losing. Join ${sideName(o.ms)} now and you stay in the game.` }); } }
       return call('wait');
     }
     if (u.role === 'guard') return call('guard', { place: 'your door' });
@@ -380,7 +387,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
     if (demo) { setTimeout(() => decide(u, demoBrain(o), null), 250); return; }
     const rid = Math.random().toString(36).slice(2, 12);
     pending.set(rid, u.id);
-    W.netSend({ type: 'brain.think', rid, model: u.model, game: GAME, rules: rulesText(), user: describe(o) });
+    W.netSend({ type: 'brain.think', rid, model: u.model, game: GAME, rules: rulesText(u), user: describe(o) });
     setTimeout(() => { if (pending.delete(rid)) { u.thinking = false; } }, 80000);
   }
   function resolve(name, pool) {
@@ -492,7 +499,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
       for (let j = 0; j < count; j++) {
         const s = cfg.squad[j], g = first + j, idx = ti * m.total + g;
         const [x, z] = MYLOT.w(11.8 + (g % 9) * 1.05, 21.5 + (g >= 9 ? 0.9 : 0));      // between the benches, by the front wall
-        makeUnit({ id: `${myId().slice(0, 8)}${j}`, name: s.name || NAMES[idx % NAMES.length] + (idx >= NAMES.length ? Math.floor(idx / NAMES.length) + 1 : ''), skin: SKINS[(ti + g) % SKINS.length], role: s.role, model: s.model, x, z }).nextThink = performance.now() + 5500 + j * 900;
+        makeUnit({ id: `${myId().slice(0, 8)}${j}`, name: s.name || NAMES[idx % NAMES.length] + (idx >= NAMES.length ? Math.floor(idx / NAMES.length) + 1 : ''), skin: SKINS[(ti + g) % SKINS.length], role: s.role, model: s.model, rules: s.rules, x, z }).nextThink = performance.now() + 5500 + j * 900;
       }
       W.netSend({ type: 'brain.budget', tokens: m.budget });
     }
@@ -546,7 +553,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
     const s = winner ? `${sideName(winner)} wins the match${how === 'time' ? ' on time (most operatives standing)' : how === 'ended' ? ' (ended by the organiser)' : ''}.` : 'The match ends in a draw.';
     note(s);
     if ((match.teams.get(W.office.id) ?? []).includes(myId())) {       // everybody shows their rules: the lesson is in comparing them
-      const mineRev = { team: team.text, personal: cfg.personal, lost: stats.lost, won: stats.won, tokens: brain.spent, standing: active(), turns: [...mine.values()].reduce((n, u) => n + u.stats.calls, 0) };
+      const mineRev = { team: team.text, personal: cfg.personal, ops: [...mine.values()].filter((u) => u.origin === myId()).map((u) => ({ name: u.name, role: u.role, model: u.model, rules: u.rules ?? '' })).slice(0, MAX_SQUAD), lost: stats.lost, won: stats.won, tokens: brain.spent, standing: active(), turns: [...mine.values()].reduce((n, u) => n + u.stats.calls, 0) };
       match.reveals.set(myId(), mineRev);
       W.netSend({ type: 'g', k: 'ar.reveal', d: { id: match.id, ...mineRev } });
     }
@@ -634,8 +641,13 @@ The rules of your team and of your commander follow. They are yours to obey.`;
         break;
       }
       case 'ar.over': if (match && !match.over && text(d.id, 12) === match.id && (p.id === match.by || p.id === W.hostId())) { const w = text(d.winner, 12); finish(match.teams.has(w) ? w : null, ['time', 'ended', 'last'].includes(d.how) ? d.how : 'last', false); } break;
-      case 'ar.reveal': if (match && text(d.id, 12) === match.id) { match.reveals.set(p.id, { team: lines(d.team, 2000), personal: lines(d.personal, 800), lost: int(d.lost, 0, 99, 0), won: int(d.won, 0, 99, 0), tokens: int(d.tokens, 0, 1e9, 0), standing: int(d.standing, 0, 99, 0), turns: int(d.turns, 0, 1e6, 0) }); if (AC.modalKind() === 'arena') openPanel(); } break;
-      case 'ar.hit': { const u = mine.get(text(d.id, 12)); if (u) takeHit(u, Math.max(1, Math.min(6, fin(d.dmg, 1))), text(d.by, 24) || p.name); break; }
+      case 'ar.reveal': if (match && text(d.id, 12) === match.id) { match.reveals.set(p.id, { team: lines(d.team, 2000), personal: lines(d.personal, 800), ops: (Array.isArray(d.ops) ? d.ops : []).slice(0, MAX_SQUAD).map((x) => ({ name: text(x?.name, 14), role: ROLES[x?.role] ? x.role : '', model: ['demo', 'haiku', 'sonnet'].includes(x?.model) ? x.model : '', rules: lines(x?.rules, 400) })), lost: int(d.lost, 0, 99, 0), won: int(d.won, 0, 99, 0), tokens: int(d.tokens, 0, 1e9, 0), standing: int(d.standing, 0, 99, 0), turns: int(d.turns, 0, 1e6, 0) }); if (AC.modalKind() === 'arena') openPanel(); } break;
+      case 'ar.hit': {
+        const u = mine.get(text(d.id, 12)); if (!u) break;
+        const from = text(d.from, 12), foe = from && find(from);
+        takeHit(u, Math.max(1, Math.min(6, fin(d.dmg, 1))), text(d.by, 24) || p.name, foe ? (foe.ally ? null : { k: 'unit', id: from }) : { k: 'player', id: p.id });
+        break;
+      }
       case 'ar.hitp': if (running() && on) W.game()?.hurt(Math.max(1, Math.min(3, fin(d.dmg, 1)))); break;
       case 'ar.grab': { const u = mine.get(text(d.id, 12)); if (u && u.st === 'ko') { u.st = 'carried'; u.by = text(d.by, 12); u.grabAt = performance.now(); } break; }
       case 'ar.drop': {
@@ -818,7 +830,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
       const ids = match.teams.get(oid) ?? [], revs = ids.map((pid) => [pid, match.reveals.get(pid)]).filter(([, r]) => r);
       const rules = revs[0]?.[1].team ?? '';
       return `<div class="team${oid === match.winner ? ' won' : ''}"><h4><span class="dot" style="background:${color(oid)}"></span>${AC.esc(sideName(oid))}${oid === match.winner ? ' &mdash; winner' : ''} <span class="muted">${revs.reduce((n, [, r]) => n + r.standing, 0)} standing, lost ${revs.reduce((n, [, r]) => n + r.lost, 0)} to talk, won over ${revs.reduce((n, [, r]) => n + r.won, 0)}</span></h4>
-        ${revs.length ? `<pre class="rules">${AC.esc(rules || '(no team rules)')}</pre>${revs.map(([pid, r]) => `<div class="muted"><b>${AC.esc(nameOf(pid))}</b>: ${r.turns} Claude turns, ${ktok(r.tokens)}${r.personal.trim() ? `<pre class="rules own">${AC.esc(r.personal)}</pre>` : ', no rules of their own'}</div>`).join('')}` : '<p class="muted">Their rules have not arrived (they left).</p>'}</div>`;
+        ${revs.length ? `<pre class="rules">${AC.esc(rules || '(no team rules)')}</pre>${revs.map(([pid, r]) => `<div class="muted"><b>${AC.esc(nameOf(pid))}</b>: ${r.turns} Claude turns, ${ktok(r.tokens)}${r.personal.trim() ? `<pre class="rules own">${AC.esc(r.personal)}</pre>` : ', no rules of their own'}${r.ops.filter((x) => x.rules.trim()).map((x) => `<div class="op-rev">${AC.esc(x.name)} <span class="muted">(${AC.esc((ROLES[x.role] ?? '').split(':')[0])}, ${AC.esc(x.model)})</span><pre class="rules own">${AC.esc(x.rules)}</pre></div>`).join('')}</div>`).join('')}` : '<p class="muted">Their rules have not arrived (they left).</p>'}</div>`;
     }).join('');
     return `<h3>Everybody's rules <span class="muted">shown to all once the match is over: compare the ones that held with the ones that broke</span></h3><div class="reveals">${rows}</div>`;
   }
@@ -847,8 +859,10 @@ The rules of your team and of your commander follow. They are yours to obey.`;
         ${cfg.squad.slice(0, n).map((s, i) => { const u = mine.get(`${myId().slice(0, 8)}${i}`); return `<tr><td><input type="text" maxlength="14" data-sq="${i}" data-f="name" value="${AC.esc(s.name)}" placeholder="a name"></td>
           <td><select data-sq="${i}" data-f="role">${Object.entries(ROLES).map(([k, v]) => `<option value="${k}"${s.role === k ? ' selected' : ''}>${AC.esc(v.split(':')[0])}</option>`).join('')}</select></td>
           <td><select data-sq="${i}" data-f="model">${modelOpt('demo', 'Demo brain (free, simple)', s.model)}${modelOpt('haiku', 'Claude Haiku (fast, light on tokens)', s.model)}${modelOpt('sonnet', 'Claude Sonnet (smarter, heavier)', s.model)}</select></td>
-          <td class="muted">${u ? `${stWord(u.st)}${u.stats.calls ? `, ${u.stats.calls} turns, ${ktok(u.stats.tokens)}` : ''}` : ''}</td></tr>`; }).join('')}
+          <td class="muted">${u ? `${stWord(u.st)}${u.stats.calls ? `, ${u.stats.calls} turns, ${ktok(u.stats.tokens)}` : ''}` : ''}</td></tr>
+          <tr class="op-rules"><td colspan="4"><textarea rows="2" maxlength="400" spellcheck="false" data-sq="${i}" data-f="rules" placeholder="Instructions for ${AC.esc(s.name || 'this operative')} alone. For example: never leave our door; answer anyone who talks to you with silence.">${AC.esc(s.rules)}</textarea></td></tr>`; }).join('')}
         </table>
+        <p class="muted">Each operative reads, every turn: the game, your team rules, your own rules, then its own instructions above. A change counts from its next turn.</p>
         <h3>Team rules <span class="muted">one text for the whole office; any of you can edit it${team.by ? `, last changed by ${AC.esc(team.by)}` : ''}</span></h3>
         <textarea id="ar-rules" rows="5" maxlength="2000" spellcheck="false">${AC.esc(team.text)}</textarea>
         <h3>Your own rules <span class="muted">added for your operatives only</span></h3>
@@ -873,7 +887,12 @@ The rules of your team and of your commander follow. They are yours to obey.`;
       </div>
       <div class="m-foot"><button class="quiet" id="ar-join">${on ? 'Leave the arena' : 'Join the arena'}</button>${!host || iHost ? `<button id="ar-start" ${canStart ? '' : 'disabled'}>Start a match</button>` : ''}</div>`);
     const box = document.getElementById('modal-box');
-    for (const el of box.querySelectorAll('[data-sq]')) el.onchange = () => { cfg.squad[Number(el.dataset.sq)][el.dataset.f] = el.dataset.f === 'name' ? text(el.value, 14) : el.value; save(); };
+    for (const el of box.querySelectorAll('[data-sq]')) el.onchange = () => {
+      const i = Number(el.dataset.sq), f = el.dataset.f, v = f === 'name' ? text(el.value, 14) : f === 'rules' ? lines(el.value, 400) : el.value;
+      cfg.squad[i][f] = v; save();
+      const u = mine.get(`${myId().slice(0, 8)}${i}`);            // in a running match: role, brain and instructions count from the next turn
+      if (u && f !== 'name') u[f] = v;
+    };
     document.getElementById('ar-rules').onchange = (e) => setTeamRules(e.target.value);
     document.getElementById('ar-own').onchange = (e) => { cfg.personal = lines(e.target.value, 800); save(); };
     document.getElementById('ar-cad').onchange = (e) => { cfg.cadence = int(e.target.value, 8, 60, 20); save(); };
@@ -948,6 +967,7 @@ The rules of your team and of your commander follow. They are yours to obey.`;
   window.WRArena = {
     quiet: false,                   // tests: join without the "whose account" question
     command, start, endNow, join: () => setOn(true), cfg, mine, field, places, setRules: setTeamRules, openSignin,
+    setOps: (list) => { list.forEach((x, i) => { if (cfg.squad[i]) Object.assign(cfg.squad[i], x); }); save(); },
     host: (v) => { hostCfg = cleanSes({ ...hostCfg, ...v }); store('wr-arena-host', hostCfg); if (W.iAmHost()) { ses = { ...hostCfg }; sendState(true); } return hostCfg; },
     state: () => ({ on, ses, brain, team: { v: team.v, text: team.text.slice(0, 80) }, match: match && { id: match.id, running: running(), over: match.over, winner: match.winner && sideName(match.winner), how: match.how, teams: match.order.map((oid) => `${sideName(oid)}:${sideCount(oid)}`), reveals: match.reveals.size },
       mine: [...mine.values()].map((u) => `${u.name}:${u.st}:${u.hp}:${u.intent.k}:${isDemo(u) ? 'demo' : u.model}`), others: rivals().map((p) => `${p.name}@${W.officeName(W.officeOf(p.id))}:${p.arena.active}:` + [...p.arena.units.values()].map((r) => `${r.name}/${r.st}/${r.hp}`).join(',')),

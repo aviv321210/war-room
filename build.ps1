@@ -62,6 +62,9 @@ New-Item -ItemType Directory -Force "$Stage\studio" | Out-Null
 Copy-Item "$Dist\studio\server.mjs" "$Stage\studio\"
 & robocopy "$Dist\studio\web" "$Stage\studio\web" /E /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw 'robocopy studio\web failed' }
+# demos on one PC: a second War Room (own demo team, studio and window) that joins this one
+New-Item -ItemType Directory -Force "$Stage\tools" | Out-Null
+Copy-Item "$Dist\tools\second-office.ps1" "$Stage\tools\"
 
 # --- 2. launcher exe ----------------------------------------------------------------------------
 Step 'compiling WarRoom.exe'

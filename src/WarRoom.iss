@@ -2,7 +2,7 @@
 ; Per-user install (no admin rights): %LOCALAPPDATA%\WarRoom. Bundles Node, Git (MinGit), the
 ; Foreman and the studio app; the window is Microsoft Edge in app mode (already on Windows 10/11).
 
-#define AppVersion "0.3.0"
+#define AppVersion "0.3.1"
 
 [Setup]
 ; a new AppId: War Room is a separate product from the old Minecraft-based AgentCraft build
@@ -38,6 +38,8 @@ Name: "{autodesktop}\War Room"; Filename: "{app}\WarRoom.exe"
 Name: "{group}\War Room"; Filename: "{app}\WarRoom.exe"
 Name: "{group}\War Room settings"; Filename: "{app}\WarRoom.exe"; Parameters: "--settings"
 Name: "{group}\Stop War Room"; Filename: "{app}\WarRoom.exe"; Parameters: "--stop"
+Name: "{group}\War Room - second office on this PC (demo)"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\tools\second-office.ps1"""; IconFilename: "{app}\WarRoom.ico"
+Name: "{group}\Stop the second office"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\tools\second-office.ps1"" -Stop"
 Name: "{group}\Uninstall War Room"; Filename: "{uninstallexe}"
 
 [Run]

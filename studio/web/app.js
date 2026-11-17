@@ -776,6 +776,7 @@ const HELP = `Plain text: a new goal for the team
 /chat <text>: to everyone on the campus   /say <text>: only to who stands near you
 /announce <text>: pin a note on the announcement boards   /cart: bring your cart
 /arena: the agent arena (squad, rules, budget)   /order <name|all> <text>: order your operatives
+In the Arena panel you can give each operative its own instructions
 /office: join or create an office   /host: host a session for everyone on this network
 /voice: microphone on or off (hold V to talk)
 /library: shared memory   J: next decision`;
